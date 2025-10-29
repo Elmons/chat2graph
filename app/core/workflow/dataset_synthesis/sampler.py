@@ -211,7 +211,7 @@ class RandomWalkSampler(SubGraphSampler):
         self.current_sample_nodes = {start_node}
         self.current_sample_edges: Set[int] = set()
         current_frontier = {start_node}
-        dfs_bias = random.uniform(*self.dfs_bias_range)  # 随机DFS偏向，增加多样性
+        dfs_bias = random.uniform(*self.dfs_bias_range)  
 
         # perform random walk steps
         for depth in range(max_depth):

@@ -132,7 +132,7 @@ class SamplingDatasetGenerator(DatasetGenerator):
                 continue
 
         if len(valid_pairs) == 0:
-            print(f"[Warning]generate 0 qa pair, input={text}")  # TODO: log方式
+            print(f"[Warning]generate 0 qa pair, input={text}")  
         return valid_pairs
 
     async def identify_strategy(self, task_desc: str) -> GENERATOR_STRATEGY:

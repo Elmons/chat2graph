@@ -42,7 +42,7 @@ def load_config_dict(path: str, skip_section: List[AgenticConfigSection]) -> Dic
             if section in skip_section:
                 continue
             section_name = str(section.value)
-            # 匹配某个 key 到下一个顶级 key 或文件末尾
+            # Match a specific key to the next top-level key or the end of the file
             pattern = re.compile(rf"(^|\n){section_name}:(.*?)(?=\n\w+:|\Z)", re.DOTALL)
             match = pattern.search(content)
             if match:

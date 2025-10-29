@@ -121,6 +121,7 @@ class QueryTaskSubtypes:
                 ),
             ],
         ),
+        #  TODO: resolve information loss when proposing local aggregations from sampled subgraphs
         # SubTaskType(
         #     level="L2",
         #     name="Small-Scale Aggregation Query",
@@ -139,7 +140,6 @@ class QueryTaskSubtypes:
         #         )
         #     ]
         # ),
-    #  TODO: resolve information loss when proposing local aggregations from sampled subgraphs
         SubTaskType(
             level="L2",
             name="Multi-Step Chain Reasoning Query",
@@ -211,7 +211,7 @@ class QueryTaskSubtypes:
                     "the Technology Department?"
                 ),
             ],
-        ),  # TODO: these subgraph-based questions may have incorrect answers, how to solve?
+        ), 
     ]
 
     #  L4: Complex Algorithm Application Tasks (Advanced Algorithms/Prediction/Anomaly Detection) 

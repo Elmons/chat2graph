@@ -26,14 +26,14 @@ class OptimizeAction(BaseModel):
 
 class WorkflowLogFormat(BaseModel):
     """Log format for each workflow optimization round."""
-    round_number: int  # round{n}
+    round_number: int
     score: float
     optimize_suggestions: List[OptimizeAction] = []
-    modifications: List[str]  # llm输出
+    modifications: List[str]  
     reflection: str
     feedbacks: List[
         Dict[str, str]
-    ]  # [{"round_number": xxx, "modificatin": xxx, "experience": xxx, "score": xxx}, ....]
+    ]  
 
 
 class OptimizeResp(BaseModel):

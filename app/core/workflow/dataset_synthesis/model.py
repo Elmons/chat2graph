@@ -2,16 +2,19 @@ from typing import List, Literal
 
 from pydantic import BaseModel
 
-TASK_TYPES = Literal["query", "non-query"]  # query表示查询类任务， non-query表示非查询类任务
+# Task types, "query" represents read-only tasks, "non-query" represents write-only tasks
+TASK_TYPES = Literal["query", "non-query"]  # 
 
+# The tv-pair in dataset can query-only, non-query-only, or mixed
 GENERATOR_STRATEGY = Literal[
     "query", "non-query", "mixed", None
-]  # 生成策略： query表示只生成查询类任务， non-query表示只生成非查询类任务， mixed表示混合生成
+]  
 
-TASK_LEVEL = Literal["L1", "L2", "L3", "L4"] # 任务层级
+# Task difficulty levels
+TASK_LEVEL = Literal["L1", "L2", "L3", "L4"] 
 
 class Row(BaseModel):
-    """数据集中的一行数据模型"""
+    """a data row model in the dataset, representing a single tv-pair"""
     level: TASK_LEVEL
     task_type: TASK_TYPES
     task_subtype: str
@@ -20,14 +23,14 @@ class Row(BaseModel):
 
 
 class WorkflowTrainDataset(BaseModel):
-    """工作流训练数据集模型"""
+    """Workflow training dataset model"""
     name: str
     task_desc: str
     data: list[Row]
 
 
 class SubTaskType(BaseModel):
-    """子任务类型模型"""
+    """Specific subtask type model"""
     level: TASK_LEVEL
     name: str
     desc: str
@@ -35,7 +38,7 @@ class SubTaskType(BaseModel):
 
 
 class LevelInfo(BaseModel):
-    """任务层级信息模型"""
+    """structured information of each task level"""
     level: TASK_LEVEL
     name: str
     desc: str

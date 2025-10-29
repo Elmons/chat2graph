@@ -42,11 +42,10 @@ class Blackhole:
     """Utility stream that discards everything written to it."""
     def write(self, *args, **kwargs):
         """Discard write calls coming from redirected stdout."""
-        pass  
+        
     
     def flush(self):
         """Accept flush calls expected by some writers."""
-        pass  
 
 class LLMEvaluator(Evaluator):
     """Leverage LLMs to score workflow executions and reflect on outcomes."""
@@ -220,7 +219,6 @@ class LLMEvaluator(Evaluator):
     ):
         """construct the infer trace for LLM. """
         #TODO: implement this method
-        pass
 
     async def _reflect(
         self, modifications: List[str], results: List[ExecuteResult], avg_score: float

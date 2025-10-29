@@ -63,7 +63,6 @@ When generating answers, reference the statistical information to cover differen
 ```
 """  # noqa: E501
 
-generate_non_query_tv_template = ""  # TODO
 
 strategy_indentify_template = """
 ## Role
