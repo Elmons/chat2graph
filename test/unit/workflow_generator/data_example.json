@@ -1,0 +1,23 @@
+[
+  {
+    "level": "L1",
+    "task_type": "query",
+    "task_subtype": "Entity Attribute and Label Query",
+    "task": "What is the account type of the account with nickname 'Myra Hyson'?",
+    "verifier": "retirement account"
+  },
+  {
+    "level": "L1",
+    "task_type": "query",
+    "task_subtype": "Direct Relationship and Neighbor Query",
+    "task": "Is there a 'TRANSFER' relationship from the account with nickname 'Myra Hyson' to the account with nickname 'Eugene Neren'?",
+    "verifier": "Yes"
+  },
+  {
+    "level": "L2",
+    "task_type": "query",
+    "task_subtype": "Multi-Hop Relationship and Path Query",
+    "task": "Can the company 'McGlynn-Lang' be associated with the account 'Eugene Neren' through a path of relationships?",
+    "verifier": "Yes, via the path: McGlynn-Lang -[OWN]-> Eugene Neren"
+  }
+]
