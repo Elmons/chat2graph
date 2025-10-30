@@ -241,7 +241,7 @@ await workflow_generator.generate()
 > 2. Ensure the database has sufficient data, depending on the subgraph sampling scale.
 >    
 >    You can use the Neo4j Docker image below to obtain the graph database used in our experiments. It imports the Finbench sf1 dataset:
->    todo
+>    [todo]()
 >
 
 - `test/example/workflow_generator/dataset_generator_example.py`: full example of using the dataset generator.

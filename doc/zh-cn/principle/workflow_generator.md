@@ -242,7 +242,7 @@ await workflow_generator.generate()
 >2. 图数据库中存在一定的数据，取决于使用时子图采样的规模
 >   
 >   可以使用下面的neo4j docker镜像来获取我们实验中使用的图数据库，该数据库导入了Finbench sf1数据：
->   todo
+>   [todo]()
 >
 
 - `test/example/workflow_generator/dataset_generator_example.py`：给出了完整的使用数据合成器的示例。
