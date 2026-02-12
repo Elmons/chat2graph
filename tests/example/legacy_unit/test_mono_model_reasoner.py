@@ -2,6 +2,7 @@ from unittest.mock import AsyncMock
 
 import pytest
 
+from app.core.common.system_env import SystemEnv
 from app.core.common.type import MessageSourceType
 from app.core.model.job import SubJob
 from app.core.model.message import ModelMessage
@@ -89,4 +90,4 @@ async def test_infer_without_operator(mock_reasoner: MonoModelReasoner, task: Ta
     # although there is no operator, the reasoner will persist the memory
     reasoner_memory = await mock_reasoner.get_memory(memory_key=task.get_reasoner_memory_key())
     messages = reasoner_memory.get_messages()
-    assert len(messages) == 101
+    assert len(messages) == 1 + SystemEnv.MAX_REASONING_ROUNDS
