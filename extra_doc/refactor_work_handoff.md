@@ -58,5 +58,5 @@
 ### 2026-02-12
 
 - What: 初始化本文件（协作约定 & 工作交接日志）。
+- Tests: N/A（仅文档变更）。
 - Next: 按 `extra_doc/refactor_plan_to_new_arch.md` 从 Milestone A（query-only）开始逐步评估与改造代码，并建立 `tests/example/` 的 mock/real_llm 测试骨架。
-
