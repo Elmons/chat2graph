@@ -130,3 +130,8 @@
 - Commit: f0efee1
 - Tests (mock-only): `.venv/bin/pytest -m "not real_llm"`
 - Next: 继续迁移 `test_system_env.py` 等纯逻辑单测到 `tests/example/`；并补充一条约定：legacy `test/` 目录暂不默认收集，迁移完成后再清理。
+
+- What: 迁移纯逻辑单测：将 `SystemEnv` 相关测试从 `test/unit/` 移到 `tests/example/`，确保新 testpaths 下仍覆盖 SystemEnv getter/setter 行为。
+- Commit: 92662f2
+- Tests (mock-only): `.venv/bin/pytest -m "not real_llm"`
+- Next: 继续筛选并迁移其它不依赖外部服务的 legacy 单测；对依赖外部服务/已失效路径的 legacy 用例做 opt-in 或重写为 mock。
