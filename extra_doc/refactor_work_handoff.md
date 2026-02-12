@@ -60,3 +60,8 @@
 - What: 初始化本文件（协作约定 & 工作交接日志）。
 - Tests: N/A（仅文档变更）。
 - Next: 按 `extra_doc/refactor_plan_to_new_arch.md` 从 Milestone A（query-only）开始逐步评估与改造代码，并建立 `tests/example/` 的 mock/real_llm 测试骨架。
+
+- What: Milestone A（query-only）落地：dataset_synthesis 强制 query-only；修复 generator 对 non-query/mixed 的隐式依赖；提升 LLM 输出 JSON 解析鲁棒性；新增 mock 测试与 real-LLM（不默认跑）测试骨架；注册 `real_llm` marker。
+- Commit: e8b8f6a
+- Tests (mock-only): `.venv/bin/pytest tests/example -m "not real_llm"`
+- Next: 继续 Milestone B（固定单 Expert 入口）：在评估/示例执行提交任务时补齐 `assigned_expert_name`，并实现“仅一个 expert 时自动绑定入口 expert”的 SDK 能力；同时把历史 `test/` 下的 real-LLM 测试逐步迁移/标记为 `real_llm`，避免默认跑到网络。
