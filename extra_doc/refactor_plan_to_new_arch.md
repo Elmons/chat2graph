@@ -211,7 +211,8 @@ flowchart TB
    把“单 Expert/固定名称/单尾 DAG/引用合法/parse/dry-run”等约束集中到一处，expander 与 generator 都调用它。
 
 2) 抽一个 `Runner`（或在 evaluator 中拆出 `run_batch(...)`）  
-   Runner 只做：`AgenticService.load` → `session.submit(TextMessage(assigned_expert_name=...))` → 等待输出；不要掺入 scoring 逻辑。
+   Runner 只做：`AgenticService.load` → `AgenticService.submit(TextMessage(assigned_expert_name=...))` → 等待输出；不要掺入 scoring 逻辑。  
+   说明：评估阶段建议避免走 `SessionWrapper.submit()`，因为它会拼接会话历史 context，增加噪声且影响可复现性。
 
 3) 日志与产物落盘接口化（哪怕仍写文件）  
    先把“写 `workflow_space/...`”封装成 `ArtifactWriter`，以后要迁移到 DB 的 `ArtifactService` 才不会动核心逻辑。
@@ -242,6 +243,49 @@ flowchart TB
 - 切换 toolset（`graph_only.yml` vs `full.yml`）不影响 MCTS 主逻辑，只影响可用 actions/tools 的上界  
 - 默认 toolset 在没有 MCP 环境时可稳定 load & run
 
+### Milestone H：评估隔离（清理单例缓存）与可并发性评估
+
+**目标**：保证每个 round/每个候选配置的评估互不污染；先在单线程稳定复现，后续再考虑并发加速。
+
+#### H.1 “缓存/状态”现在主要存在哪里（需要清理/隔离的点）
+
+1) **Singleton 实例缓存（进程内）**  
+   - `Singleton._instances` / `AbcSingleton._instances`：`app/core/common/singleton.py`  
+   - 影响：`AgenticService` 及所有 `...Service/Dao`（toolkit、job/message、agent 等）都会跨 round 残留。
+
+2) **工具图（进程内）**  
+   - `ToolkitService._toolkit`：`app/core/service/toolkit_service.py`  
+   - 影响：多次 `AgenticService.load()` 会不断向工具图 add action/tool，若不重置会导致推荐子图/可用工具集变形。
+
+3) **MCP 连接缓存（进程内）**  
+   - `ToolConnectionService._connections`：`app/core/service/tool_connection_service.py`（按 job/operator 缓存连接）  
+   - 说明：正常执行路径会在 operator 结束时 `release_connection`（`app/core/workflow/operator.py`），但为了鲁棒性，评估隔离仍应把它视作“需要 reset 的状态”。
+
+4) **环境变量读取缓存（进程内）**  
+   - `SystemEnv` 的 `_env_values`：`app/core/common/system_env.py`  
+   - 影响：如果评估过程中希望动态切换 env（例如 app_root/db），仅改 os env 可能不会生效（因为值被缓存了）。
+
+5) **SQLite 持久化（磁盘）**  
+   - 默认 DB：`~/.chat2graph/system/chat2graph.db`（来自 `SystemEnv.DATABASE_URL` 默认值）  
+   - 影响：Job/Message/Session 等会持续写入，虽然不是缓存，但会影响“实验隔离/调试体验/长期增长”。
+
+#### H.2 最小改法（推荐先做）：单线程 + 每轮 reset 单例缓存
+
+- 在 `app/core/workflow/workflow_generator/mcts_workflow_generator/evaluator.py` 的每个 round 开始处调用 `reset_runtime_state()`：  
+  - `Singleton._instances.clear()`  
+  - `AbcSingleton._instances.clear()`  
+  - （可选）清理 `SystemEnv` 的 `_env_values`（可封装成 `SystemEnv.reset_cache()`，避免直接 import 私有变量）
+- 然后再做一次 `AgenticService.load(round_workflow.yml)`，并在该 round 内复用 `agent_sys`，不要在 batch 内重复 load。
+
+> 备注：`app/core/dal/database.py` 的 SQLAlchemy `engine` 是模块 import 时创建的，因此“在同一进程里动态切换 DB”并不友好；如果你需要强隔离 DB，建议走多进程或预先设好 env 后再 import。
+
+#### H.3 并发评估的工作量评估（先定预期）
+
+- **同进程并发（不建议）**：需要系统性去单例化（引入 RuntimeContext），工作量大。  
+- **多进程并发（可行，中等工作量）**：每个候选/round 在独立进程跑，天然隔离单例；但需要处理：
+  - 每进程独立 `APP_ROOT/DATABASE_URL`（避免 SQLite 写锁与数据串扰）
+  - 在 import `app.core.dal.database` 前就设置好相关 env（否则 engine 已固定）
+
 ---
 
 ## 5. 验收标准（本轮）
@@ -252,6 +296,7 @@ flowchart TB
 4) 日志可重建 parent/child（能画出“配置版本树”并解释每轮改动）
 5) 单 Expert 模式下，用户对话不必手动指定 `assigned_expert_name` 也能稳定命中入口 Expert
 6) toolset(U) 可切换，默认不依赖 BrowserUse MCP
+7) 评估结果可复现：每轮评估前 runtime 状态被 reset，不会因单例残留导致 round 间污染
 
 ---
 
@@ -312,7 +357,7 @@ flowchart TB
 - 候选配置的稳定标识（建议加：config hash、或至少 config path）
 - 每轮改动摘要与分数变化在数据结构里要规范化（便于写论文实验分析）
 
-把这些补齐后，即使不写 Tree 类，也能用 log 画出树、计算 UCT、追踪最优路径与失败分支。
+把这些补齐后，即使不写 Tree 类，也能用 log 画出树、追踪最优路径与失败分支。
 
 ---
 
@@ -328,7 +373,7 @@ flowchart TB
 
 建议做的事（路线二选一，推荐走 B）：
 
-**路线 A：明确“问题只关于子图”**（最省事，但任务更像“数据集题目”而不是真实线上查询）
+**路线 A：明确“问题只关于子图”**（最省事，但更像“离线数据集题目”，不适合线上执行）
 - Prompt 里强制要求问题写清楚“在给定子图中…/在本次采样子图中…”
 - Filter/Validator 只保留显式子图范围的问题
 - 适用：训练早期、快速跑通闭环、对真实性要求不高的 ablation
@@ -337,6 +382,8 @@ flowchart TB
 - 将 Row 的 `verifier` 从“答案文本”升级为 **可执行验证器**（例如 Cypher / 工具调用计划 / 结构化约束），并由系统执行得到 ground-truth
 - 在生成时额外提供/维护 **全局统计摘要**（schema、节点/边计数、关键属性分布的摘要），避免 LLM误判“子图=全局”
 - 增加 deterministic 校验：每条样本必须能在 GraphDb 上跑通并返回结果（否则丢弃）
+
+> 重要说明：因为 agent 执行阶段拿到的是**全局图**且不会携带子图上下文，所以如果目标是“线上可执行的图任务”，基本必须采用路线 B（路线 A 只适合作为早期/对照实验）。
 
 落点建议（不改整体接口的最小版本）：
 - 新增 `app/core/workflow/dataset_synthesis/validator.py`：`validate_row(row, graph_db, subgraph_ctx)->(ok, reason, normalized_verifier)`  
