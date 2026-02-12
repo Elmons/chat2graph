@@ -100,3 +100,8 @@
 - Commit: 4526bb4
 - Tests (mock-only): `.venv/bin/pytest tests/example -m "not real_llm"`
 - Next: 迁移 `test/` 下的示例与测试到 `tests/example/`（尤其是 `test/example/test_minimal_sdk_yaml.py`），并将 real-LLM/外部依赖测试全部标记为 opt-in（默认不跑）。
+
+- What: 将历史 `test/example/test_minimal_sdk_yaml.py` 的 live-LLM 用例改为 opt-in：增加 `real_llm` marker，并要求 `CHAT2GRAPH_RUN_REAL_LLM_TESTS=1` 才会执行，避免默认测试触网调用模型。
+- Commit: baeb776
+- Tests (mock-only): `.venv/bin/pytest tests/example -m "not real_llm"`
+- Next: 把 `test/example/test_minimal_sdk_yaml.py` 迁移到 `tests/example/`（并移除旧路径），再评估是否需要把 `pyproject.toml` 的 pytest `testpaths` 调整为 `tests`（独立 commit，避免影响现有 CI）。
