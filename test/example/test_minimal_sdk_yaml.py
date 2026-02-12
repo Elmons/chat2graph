@@ -2,6 +2,7 @@ from __future__ import annotations
 
 from collections.abc import Iterator
 import logging
+import os
 from pathlib import Path
 
 import pytest
@@ -41,10 +42,10 @@ def _has_llm_config() -> bool:
     return bool(SystemEnv.LLM_NAME and SystemEnv.LLM_ENDPOINT and SystemEnv.LLM_APIKEY)
 
 
+@pytest.mark.real_llm
 def test_minimal_submit_hi_async_if_llm_configured() -> None:
-    # if os.getenv("CHAT2GRAPH_RUN_LLM_TESTS", "").lower() not in {"1", "true", "yes"}:
-    #     pytest.skip("Set CHAT2GRAPH_RUN_LLM_TESTS=1 to run live LLM execution")
-
+    if os.getenv("CHAT2GRAPH_RUN_REAL_LLM_TESTS", "").lower() not in {"1", "true", "yes"}:
+        pytest.skip("Set CHAT2GRAPH_RUN_REAL_LLM_TESTS=1 to run live LLM execution")
     if not _has_llm_config():
         pytest.skip(
             "LLM not configured (LLM_NAME/LLM_ENDPOINT/LLM_APIKEY missing); skipping execute"
@@ -64,6 +65,5 @@ def test_minimal_submit_hi_async_if_llm_configured() -> None:
         payload = msg.get_instruction_message().get_payload()
     else:
         payload = msg.get_payload()
-    print("payload:", payload)
     assert isinstance(payload, str)
     assert payload.strip()
