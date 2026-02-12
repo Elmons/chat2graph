@@ -160,6 +160,20 @@ class SamplingDatasetGenerator(DatasetGenerator):
             try:
                 parsed = json.loads(block)
             except Exception:
+                # Common LLM pattern: JSON objects separated by newlines (JSONL-ish).
+                for line in block.splitlines():
+                    line = line.strip()
+                    if not line:
+                        continue
+                    try:
+                        item = json.loads(line)
+                    except Exception:
+                        continue
+                    if isinstance(item, dict):
+                        _maybe_add_obj(item)
+
+                if len(valid_pairs) > block_pairs_before:
+                    break
                 continue
 
             if isinstance(parsed, list):
