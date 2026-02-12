@@ -8,11 +8,31 @@ from app.core.workflow.workflow_generator.mcts_workflow_generator.validator impo
 )
 
 
-def test_validator_accepts_repo_basic_template() -> None:
-    path = Path(
-        "app/core/workflow/workflow_generator/mcts_workflow_generator/init_template/basic_template.yml"
+def test_validator_accepts_repo_basic_template(tmp_path: Path) -> None:
+    # base_template doesn't include tools/actions/toolkit; validator expects full workflow.yml.
+    # Validate the assembled round1 workflow produced by MCTSWorkflowGenerator.
+    from app.core.workflow.dataset_synthesis.model import WorkflowTrainDataset
+    from app.core.workflow.workflow_generator.mcts_workflow_generator.generator import (
+        MCTSWorkflowGenerator,
     )
-    result = validate_workflow_yaml(path)
+    from app.core.workflow.workflow_generator.mcts_workflow_generator.model import AgenticConfigSection
+
+    dataset = WorkflowTrainDataset(name="ds", task_desc="d", data=[])
+    gen = MCTSWorkflowGenerator(
+        db=object(),  # type: ignore[arg-type]
+        dataset=dataset,
+        selector=object(),  # type: ignore[arg-type]
+        expander=object(),  # type: ignore[arg-type]
+        evaluator=object(),  # type: ignore[arg-type]
+        optimize_grain=[AgenticConfigSection.EXPERTS, AgenticConfigSection.OPERATORS],
+        optimized_path=str(tmp_path / "ws"),
+        max_rounds=1,
+        top_k=1,
+    )
+    # write assembled workflow.yml
+    gen.init_workflow()
+    round1 = Path(gen.optimized_path) / "round1" / "workflow.yml"
+    result = validate_workflow_yaml(round1)
     assert result.ok, result.errors
 
 

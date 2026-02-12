@@ -1,7 +1,6 @@
 import json
 from pathlib import Path
 import random
-import shutil
 import time
 from typing import Dict, List, Optional, Tuple
 
@@ -37,9 +36,12 @@ class MCTSWorkflowGenerator(WorkflowGenerator):
         evaluator: Evaluator,
         optimize_grain: List[AgenticConfigSection],
         main_expert_name: Optional[str] = None,
+        toolset_path: str = (
+            "app/core/workflow/workflow_generator/mcts_workflow_generator/toolsets/default.yml"
+        ),
         init_template_path: str = (
             "app/core/workflow/workflow_generator/mcts_workflow_generator/"
-            "init_template/basic_template.yml"
+            "init_template/base_template.yml"
         ),
         max_rounds: int = 30,
         optimized_path: str = "workflow_space",
@@ -64,6 +66,7 @@ class MCTSWorkflowGenerator(WorkflowGenerator):
         self.optimize_grain = optimize_grain
         self.init_template_path = init_template_path
         self.main_expert_name = main_expert_name
+        self.toolset_path = toolset_path
         self.init_config_dict: Dict[str, str] = {}
         self.max_score: float = -1
         self.optimal_round = 0
@@ -75,9 +78,47 @@ class MCTSWorkflowGenerator(WorkflowGenerator):
         save_path = Path(self.optimized_path) / "round1"
         save_path.mkdir(parents=True, exist_ok=True)
 
-        # 写入 workflow.py 文件
+        # 写入 workflow.yml 文件
         workflow_file = save_path / "workflow.yml"
-        shutil.copy2(self.init_template_path, workflow_file)
+        base_dict = load_config_dict(self.init_template_path, skip_section=[])
+        toolset_dict = load_config_dict(self.toolset_path, skip_section=[])
+
+        def _req(section: AgenticConfigSection, src: Dict[str, str], name: str) -> str:
+            key = str(section.value)
+            val = src.get(key)
+            if not val:
+                raise ValueError(f"Missing `{key}` section in {name}")
+            return val
+
+        with open(workflow_file, "w", encoding="utf-8") as f:
+            # base sections
+            for section in [
+                AgenticConfigSection.APP,
+                AgenticConfigSection.PLUGIN,
+                AgenticConfigSection.REASONER,
+            ]:
+                f.write(_req(section, base_dict, "base_template"))
+                f.write("\n\n")
+
+            # toolset sections (U)
+            for section in [
+                AgenticConfigSection.TOOLS,
+                AgenticConfigSection.ACTIONS,
+                AgenticConfigSection.TOOLKIT,
+            ]:
+                f.write(_req(section, toolset_dict, "toolset"))
+                f.write("\n\n")
+
+            # base runtime sections
+            for section in [
+                AgenticConfigSection.OPERATORS,
+                AgenticConfigSection.EXPERTS,
+                AgenticConfigSection.KNOWLEDGEBASE,
+                AgenticConfigSection.MEMORY,
+                AgenticConfigSection.ENV,
+            ]:
+                f.write(_req(section, base_dict, "base_template"))
+                f.write("\n\n")
 
         print(f"Initialized default workflow at: {workflow_file}")
         if not self.main_expert_name:

@@ -1,0 +1,32 @@
+app:
+  name: "Chat2Graph"
+  desc: "An Agentic System on Graph Database."
+  version: "0.0.1"
+
+plugin:
+  workflow_platform: "DBGPT"
+
+reasoner:
+  type: "DUAL"
+
+operators:
+  - &qa_operator
+    instruction: |
+      You are a helpful assistant.
+      Respond directly and concisely to the user's message.
+      If the user greets (e.g., "hi"), greet back.
+    output_schema: |
+      answer: The final answer text.
+    actions: []
+
+experts:
+  - profile:
+      name: "Main Expert"
+      desc: "Single entry expert (container) for workflow generation."
+    workflow:
+      - - *qa_operator
+
+knowledgebase: {}
+memory: {}
+env: {}
+
