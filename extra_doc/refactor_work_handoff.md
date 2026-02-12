@@ -110,3 +110,8 @@
 - Commit: 743edb2
 - Tests (mock-only): `.venv/bin/pytest tests/example -m "not real_llm"`
 - Next: 评估是否将 pytest `testpaths` 从 `test` 迁移到 `tests`（独立 commit），并逐步把 `test/unit` 下的用例也迁移到 `tests/example`（或建立 `tests/unit` 子目录并更新约定）。
+
+- What: 将 pytest 默认发现路径切换到 `tests/`（不再默认收集 `test/`），避免 legacy 测试因历史依赖缺失导致 collection 失败；后续按约定逐步迁移/重写旧用例。
+- Commit: 02ad207
+- Tests (mock-only): `.venv/bin/pytest -m "not real_llm"`
+- Next: 将 `test/unit` 下仍有价值的用例按模块迁移到 `tests/`（建议 `tests/unit/`），并在迁移过程中把所有外部依赖（LLM/MCP/DB）测试都改为 opt-in。
