@@ -90,3 +90,8 @@
 - Commit: f398f90
 - Tests (mock-only): `.venv/bin/pytest tests/example -m "not real_llm"`
 - Next: 把 init template 的 expert 名称也参数化（或在生成器里自动从模板读取并设置 `main_expert_name`），再继续做单尾约束/引用校验的增强（例如 operator 字段完整性、workflow 引用唯一性）。
+
+- What: 生成器支持从 init template 自动推断单 Expert 入口名称（single-expert 时无需再手动传 `main_expert_name`），并补充推断函数与单测。
+- Commit: 38eb3a1
+- Tests (mock-only): `.venv/bin/pytest tests/example -m "not real_llm"`
+- Next: 继续增强候选 YAML 校验（operator 字段完整性/唯一性、workflow 引用一致性），并把示例 `test/example/workflow_generator/workflow_generator_example.py` 迁移到 `tests/example/`（按测试约定）。
