@@ -46,20 +46,16 @@ OPERATORS_YAML = """operators:
   - &operator_one
     instruction: Original instruction
     output_schema: Original schema
-    actions:
-      - action_one
+    actions: []
 """
 
 
 EXPERTS_YAML = """experts:
   - profile:
-      name: ExpertOne
+      name: Main Expert
       desc: Handles queries
-    reasoner:
-      actor_name: ExpertOne
-      thinker_name: ExpertOne
     workflow:
-      - - operator_one
+      - - *operator_one
 """
 
 
@@ -67,20 +63,16 @@ OPERATORS_UPDATE = """operators:
   - &operator_new
     instruction: Updated instruction
     output_schema: Updated schema
-    actions:
-      - action_one
+    actions: []
 """
 
 
 EXPERTS_UPDATE = """experts:
   - profile:
-      name: ExpertOne
+      name: Main Expert
       desc: Handles queries
-    reasoner:
-      actor_name: ExpertOne
-      thinker_name: ExpertOne
     workflow:
-      - - operator_new
+      - - *operator_new
 """
 
 
@@ -305,6 +297,9 @@ async def test_llm_evaluator_evaluate_workflow(monkeypatch, tmp_path):
         def __init__(self):
             self.counter = 0
 
+        def entry_expert_name(self):  # noqa: D401
+            return "Main Expert"
+
         def session(self):  # noqa: D401
             return self
 
@@ -344,7 +339,7 @@ async def test_llm_evaluator_evaluate_workflow(monkeypatch, tmp_path):
 @pytest.mark.asyncio
 async def test_mcts_generator_generate_rounds(monkeypatch, tmp_path):
     dataset = _make_dataset()
-    base_path = Path(__file__).resolve().parents[3]
+    base_path = Path(__file__).resolve().parents[4]
     init_template = (
         base_path
         / "app"
@@ -353,7 +348,7 @@ async def test_mcts_generator_generate_rounds(monkeypatch, tmp_path):
         / "workflow_generator"
         / "mcts_workflow_generator"
         / "init_template"
-        / "basic_template.yml"
+        / "base_template.yml"
     )
 
     stub_selector = _StubSelector()
@@ -390,7 +385,7 @@ async def test_mcts_generator_generate_rounds(monkeypatch, tmp_path):
 
 def test_mcts_generator_load_config_dict(monkeypatch, tmp_path):
     dataset = _make_dataset()
-    base_path = Path(__file__).resolve().parents[3]
+    base_path = Path(__file__).resolve().parents[4]
     init_template = (
         base_path
         / "app"
@@ -399,7 +394,7 @@ def test_mcts_generator_load_config_dict(monkeypatch, tmp_path):
         / "workflow_generator"
         / "mcts_workflow_generator"
         / "init_template"
-        / "basic_template.yml"
+        / "base_template.yml"
     )
 
     monkeypatch.setattr(
