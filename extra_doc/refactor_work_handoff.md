@@ -95,3 +95,8 @@
 - Commit: 38eb3a1
 - Tests (mock-only): `.venv/bin/pytest tests/example -m "not real_llm"`
 - Next: 继续增强候选 YAML 校验（operator 字段完整性/唯一性、workflow 引用一致性），并把示例 `test/example/workflow_generator/workflow_generator_example.py` 迁移到 `tests/example/`（按测试约定）。
+
+- What: 增强 workflow 校验器：operator 的 actions 引用校验（基于 action.name），并改进 operator canonicalization（从 action dict 中提取 name），减少误合并/误判。
+- Commit: 4526bb4
+- Tests (mock-only): `.venv/bin/pytest tests/example -m "not real_llm"`
+- Next: 迁移 `test/` 下的示例与测试到 `tests/example/`（尤其是 `test/example/test_minimal_sdk_yaml.py`），并将 real-LLM/外部依赖测试全部标记为 opt-in（默认不跑）。
