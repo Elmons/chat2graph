@@ -1,17 +1,14 @@
 from abc import ABC, abstractmethod
 import json
-import random
 import re
-from typing import Dict, List, cast, get_args
+from typing import Dict, List
 
 from app.core.common.system_env import SystemEnv
 from app.core.common.type import MessageSourceType
 from app.core.model.message import ModelMessage
 from app.core.prompt.data_synthesis import (
     filter_prompt_template,
-    generate_non_query_tv_template,
     generate_query_tv_template,
-    strategy_indentify_template,
 )
 from app.core.reasoner.model_service_factory import ModelService, ModelServiceFactory
 from app.core.toolkit.graph_db.graph_db import GraphDb
@@ -65,8 +62,6 @@ class SamplingDatasetGenerator(DatasetGenerator):
                  from the provided graph_db (replaces the previous sampler_cls).
       - strategy: generation strategy. See GENERATOR_STRATEGY; typical values:
           * "query"     — generate only query-type tasks
-          * "non-query" — generate only non-query-type tasks
-          * "mixed"     — generate a mix of query and non-query tasks
       - max_depth / max_nodes / max_edges: limits controlling sampled subgraph size.
       - nums_per_subgraph: number of examples requested per sampled subgraph.
 
@@ -103,100 +98,100 @@ class SamplingDatasetGenerator(DatasetGenerator):
         self.nums_per_subgraph = nums_per_subgraph
 
     def extract_pairs(self, task_type: TASK_TYPES, text: str) -> list[Row]:
-        """Extract TV pairs from an LLM response."""
+        """Extract TV pairs from an LLM response.
+
+        The LLM is prompted to output a JSON list of objects. In practice, model outputs
+        may be wrapped in markdown fences or include extra prose. This parser tries to be
+        robust without relying on regex patterns that break on braces inside strings.
+        """
         required_fields = Row.model_fields.keys()
         whitelist = ["task_type"]
-        pattern = r"\{[^{}]*\}"
-        qas = re.findall(pattern, text, re.DOTALL)
+
+        def _iter_json_blocks(raw: str) -> list[str]:
+            raw = raw.strip()
+            if not raw:
+                return []
+
+            blocks: list[str] = [raw]
+
+            # Common: fenced JSON blocks.
+            for m in re.finditer(r"```(?:json)?\s*(.*?)```", raw, re.DOTALL | re.IGNORECASE):
+                inner = m.group(1).strip()
+                if inner:
+                    blocks.append(inner)
+
+            # Common: extra text around a JSON list/dict.
+            lbrack = raw.find("[")
+            rbrack = raw.rfind("]")
+            if 0 <= lbrack < rbrack:
+                blocks.append(raw[lbrack : rbrack + 1])
+
+            lbrace = raw.find("{")
+            rbrace = raw.rfind("}")
+            if 0 <= lbrace < rbrace:
+                blocks.append(raw[lbrace : rbrace + 1])
+
+            # De-dup while preserving order.
+            seen: set[str] = set()
+            uniq: list[str] = []
+            for b in blocks:
+                if b not in seen:
+                    uniq.append(b)
+                    seen.add(b)
+            return uniq
+
         valid_pairs: list[Row] = []
-        for qa in qas:
+
+        def _maybe_add_obj(obj: Dict) -> None:
+            valid = True
+            for filed in required_fields:
+                if filed in whitelist:
+                    continue
+                if filed not in obj:
+                    valid = False
+                    break
+            if not valid:
+                return
+            obj["task_type"] = task_type
+            valid_pairs.append(Row.model_validate(obj))
+
+        for block in _iter_json_blocks(text):
+            block_pairs_before = len(valid_pairs)
             try:
-                # Parse the matched string as JSON
-                obj: Dict = json.loads(qa)
-
-                # Validate that all fields of Row are present
-                valid = True
-                for filed in required_fields:
-                    if filed in whitelist:
-                        continue
-
-                    if filed not in obj:
-                        valid = False
-                        break
-
-                if valid:
-                    obj["task_type"] = task_type
-                    valid_pairs.append(Row.model_validate(obj))
+                parsed = json.loads(block)
             except Exception:
-                # parsing failed, skip
                 continue
+
+            if isinstance(parsed, list):
+                for item in parsed:
+                    if isinstance(item, dict):
+                        _maybe_add_obj(item)
+            elif isinstance(parsed, dict):
+                _maybe_add_obj(parsed)
+
+            # If this block produced any pairs, treat it as the intended payload and stop.
+            if len(valid_pairs) > block_pairs_before:
+                break
 
         if len(valid_pairs) == 0:
             print(f"[Warning]generate 0 qa pair, input={text}")  
         return valid_pairs
 
     async def identify_strategy(self, task_desc: str) -> GENERATOR_STRATEGY:
-        """Identify generation strategy("query", "non-query", "mixed") from task description using the LLM."""  # noqa: E501
-        
-        # return preset strategy if provided
-        if self.strategy is not None:
-            return self.strategy
+        """Identify generation strategy (query-only).
 
-        # init prompt and messages
-        messages: List[ModelMessage] = []
-        found_strategy: GENERATOR_STRATEGY = None
-        strategy_types: List[str] = [
-            strategy for strategy in get_args(GENERATOR_STRATEGY) if strategy
-        ]
-        strategy_pattern = re.compile(r"\b(query|non-query|mixed)\b", flags=re.I)
-        prompt = strategy_indentify_template.format(
-            task_desc=task_desc, strategy_list=str(strategy_types)
-        )
-        job_id = "identify_strategy_job"
-        times = 0
-        step = 1
+        Query-only is a hard constraint for this refactor iteration.
+        See extra_doc/refactor_plan_to_new_arch.md (Milestone A).
+        """
+        if self.strategy is None:
+            return "query"
 
-        message = ModelMessage(
-            payload=prompt,
-            source_type=MessageSourceType.MODEL,
-            job_id=job_id,
-            step=step,
-        )
-        messages.append(message)
-
-        # try to identify strategy
-        while times < 3 and found_strategy is None:
-            times += 1
-            response = await self._llm.generate(sys_prompt="", messages=messages)
-
-            text = response.get_payload()
-            hits: set[GENERATOR_STRATEGY] = {
-                cast(GENERATOR_STRATEGY, m.group(0).lower())
-                for m in strategy_pattern.finditer(text)
-            }
-            if len(hits) > 1:
-                messages.append(
-                    ModelMessage(
-                        payload=text, source_type=MessageSourceType.ACTOR, job_id=job_id, step=step
-                    )
-                )
-
-                step += 1
-                messages.append(
-                    ModelMessage(
-                        payload=(
-                            "Find multiple strategy "
-                            f"{hits} in your answer. Please re-examine your answer"
-                        ),
-                        source_type=MessageSourceType.MODEL,
-                        job_id=job_id,
-                        step=step,
-                    )
-                )
-            elif hits:
-                return hits.pop()
-
-        return None
+        if self.strategy != "query":
+            print(
+                f"[SamplingDatasetGenerator] strategy={self.strategy} is not supported; "
+                "downgrade to 'query'"
+            )
+        return "query"
 
     async def generate_pairs(
         self,
@@ -209,12 +204,9 @@ class SamplingDatasetGenerator(DatasetGenerator):
         """Generate TV pairs from a subgraph using the LLM."""
 
         # prompt selection and construction
-        prompt_template_map = {
-            "query": generate_query_tv_template,
-            "non-query": generate_non_query_tv_template,
-        }
-
-        prompt_template = prompt_template_map[task_type]
+        if task_type != "query":
+            raise ValueError(f"Unsupported task_type={task_type} in query-only mode")
+        prompt_template = generate_query_tv_template
         prompt = prompt_template.format(
             task_description=task_description,
             subgraph=subgraph,
@@ -248,10 +240,12 @@ class SamplingDatasetGenerator(DatasetGenerator):
         """
         if strategy is None:
             raise ValueError("strategy is None")
-        if strategy != "mixed":
-            return strategy
-
-        return random.choice([x for x in get_args(TASK_TYPES) if x])
+        if strategy != "query":
+            print(
+                f"[SamplingDatasetGenerator] strategy={strategy} is not supported; "
+                "downgrade to 'query'"
+            )
+        return "query"
 
     async def filter(
         self, task_type: TASK_TYPES, task_desc: str, subgraph: str, dataset: list[Row]

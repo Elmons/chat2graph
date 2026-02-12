@@ -377,6 +377,8 @@ class GraphTaskTypesInfo:
         self,
         strategy: GENERATOR_STRATEGY = "query",
     ):
+        if strategy is None:
+            strategy = "query"
         self.strategy = strategy
         self.tasks_info = SUBTYPES_MAP[str(strategy)]
         self.count_info: Dict[str, Dict[str, int]] = {}

@@ -115,5 +115,6 @@ filterwarnings = [
     "ignore:open_text is deprecated.*:DeprecationWarning",
 ]
 markers = [
-    "asyncio: mark test as async"
+    "asyncio: mark test as async",
+    "real_llm: tests that call real LLMs (opt-in)",
 ]

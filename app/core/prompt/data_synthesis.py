@@ -89,15 +89,6 @@ Example 1:
 Task description: "Query all product nodes associated with the 'purchase' edges in the past 30 days and count the sales volume of each category."
 Output: query
 
-Example 2:
-Task description: "Import new user data from a CSV file, create 'User' nodes and 'registration' edges. Confirm whether the 'User' node type definition already exists in the graph before importing."
-Output: non-query
-
-Example 3:
-Task description: "Detect duplicate 'product' nodes in the graph, delete redundant nodes and merge their associated edges."
-Output: mixed
-
-
 **Please analyze the following task descriptions:**
 ## Task Description
 {task_desc}

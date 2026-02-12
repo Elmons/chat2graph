@@ -2,13 +2,12 @@ from typing import List, Literal
 
 from pydantic import BaseModel
 
-# Task types, "query" represents read-only tasks, "non-query" represents write-only tasks
-TASK_TYPES = Literal["query", "non-query"]  # 
+# Task types:
+# This repo is query-only for now (see extra_doc/refactor_plan_to_new_arch.md).
+TASK_TYPES = Literal["query"]
 
-# The tv-pair in dataset can query-only, non-query-only, or mixed
-GENERATOR_STRATEGY = Literal[
-    "query", "non-query", "mixed", None
-]  
+# Dataset synthesis strategy (query-only for now).
+GENERATOR_STRATEGY = Literal["query", None]
 
 # Task difficulty levels
 TASK_LEVEL = Literal["L1", "L2", "L3", "L4"] 
