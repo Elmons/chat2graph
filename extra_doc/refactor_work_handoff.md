@@ -140,3 +140,8 @@
 - Commit: 5b3ad8f
 - Tests (mock-only): `.venv/bin/pytest -m "not real_llm"`
 - Next: 继续迁移不依赖外部服务的 legacy 单测；剩余依赖 DB/MCP/失效模块的用例需要单独评估（opt-in 或重写）。
+
+- What: 迁移 legacy 用例：ReasonerService 集成测试迁移到 `tests/example/`；并用 `pytest.importorskip` 处理缺失的 `EnhancedReasoner` 模块，避免 collection 失败。同时调整 `tests/example/conftest.py` 在每个测试前重置 singleton 后调用 `init_server()`，兼容迁移过来的依赖 ServiceFactory/DaoFactory 的用例。
+- Commit: 57b1a2b
+- Tests (mock-only): `.venv/bin/pytest -m "not real_llm"`
+- Next: 继续迁移 `test/unit/` 其余测试文件到 `tests/example/`，并处理 import-time 初始化与外部依赖（MCP/DB）问题，直到 `test/` 目录不再包含测试文件。
