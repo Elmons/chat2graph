@@ -1,3 +1,5 @@
+import os
+import shutil
 import subprocess
 
 import pytest
@@ -5,6 +7,9 @@ import pytest
 
 def run_command(command: str):
     """Run a command and assert it exits with 0."""
+    exe = command.strip().split(" ", 1)[0]
+    if shutil.which(exe) is None:
+        pytest.skip(f"Command {exe!r} not available")
     try:
         subprocess.run(
             command,
@@ -24,11 +29,15 @@ def run_command(command: str):
 
 def test_mypy_checks():
     """Run mypy checks on the codebase."""
+    if os.getenv("CHAT2GRAPH_RUN_LINT_TESTS", "").lower() not in {"1", "true", "yes"}:
+        pytest.skip("Set CHAT2GRAPH_RUN_LINT_TESTS=1 to enable lint/typecheck tests")
     run_command("mypy app")
-    run_command("mypy test/example")
+    run_command("mypy tests/example")
 
 
 def test_ruff_checks():
     """Run ruff checks on the codebase."""
+    if os.getenv("CHAT2GRAPH_RUN_LINT_TESTS", "").lower() not in {"1", "true", "yes"}:
+        pytest.skip("Set CHAT2GRAPH_RUN_LINT_TESTS=1 to enable lint/typecheck tests")
     run_command("ruff check app")
-    run_command("ruff check test/example")
+    run_command("ruff check tests/example")

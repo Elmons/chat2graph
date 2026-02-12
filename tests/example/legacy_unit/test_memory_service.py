@@ -1,6 +1,7 @@
 from uuid import uuid4
 
 import pytest
+from unittest.mock import AsyncMock, patch
 
 from app.core.common.system_env import SystemEnv
 from app.core.memory.memory import BuiltinMemory
@@ -28,10 +29,14 @@ async def test_reasoner_memory_factory_when_memfuse_enabled():
     """When MemFuse is enabled, the factory should create MemFuseMemory."""
     SystemEnv.ENABLE_MEMFUSE = True
 
-    ms: MemoryService = MemoryService.instance
-    mem = await ms.get_or_create_reasoner_memory(
-        MemoryKey(job_id="job_test_builtin" + str(uuid4()), operator_id="op_a" + str(uuid4()))
-    )
+    with patch(
+        "app.plugin.memfuse.memory.MemFuseMemory.initialize", new_callable=AsyncMock
+    ) as mock_init:
+        mock_init.return_value = AsyncMock()
+        ms: MemoryService = MemoryService.instance
+        mem = await ms.get_or_create_reasoner_memory(
+            MemoryKey(job_id="job_test_builtin" + str(uuid4()), operator_id="op_a" + str(uuid4()))
+        )
     assert isinstance(mem, MemFuseReasonerMemory)
 
 
@@ -40,8 +45,12 @@ async def test_operator_memory_factory_when_memfuse_enabled():
     """When MemFuse is enabled, the factory should create MemFuseMemory."""
     SystemEnv.ENABLE_MEMFUSE = True
 
-    ms: MemoryService = MemoryService.instance
-    mem = await ms.get_or_create_operator_memory(
-        MemoryKey(job_id="job_test_builtin" + str(uuid4()), operator_id="op_a" + str(uuid4()))
-    )
+    with patch(
+        "app.plugin.memfuse.memory.MemFuseMemory.initialize", new_callable=AsyncMock
+    ) as mock_init:
+        mock_init.return_value = AsyncMock()
+        ms: MemoryService = MemoryService.instance
+        mem = await ms.get_or_create_operator_memory(
+            MemoryKey(job_id="job_test_builtin" + str(uuid4()), operator_id="op_a" + str(uuid4()))
+        )
     assert isinstance(mem, MemFuseOperatorMemory)
