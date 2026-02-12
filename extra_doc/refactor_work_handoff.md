@@ -65,3 +65,8 @@
 - Commit: e8b8f6a
 - Tests (mock-only): `.venv/bin/pytest tests/example -m "not real_llm"`
 - Next: 继续 Milestone B（固定单 Expert 入口）：在评估/示例执行提交任务时补齐 `assigned_expert_name`，并实现“仅一个 expert 时自动绑定入口 expert”的 SDK 能力；同时把历史 `test/` 下的 real-LLM 测试逐步迁移/标记为 `real_llm`，避免默认跑到网络。
+
+- What: Milestone B（固定单 Expert 入口）第一步：实现 single-expert 模式下的“入口 Expert 自动绑定”，并让 MCTS `LLMEvaluator` 提交任务时强制走 entry expert，避免 Leader 分解触发额外 LLM 调用；新增对应 mock 测试与 real-LLM（不默认跑）测试。
+- Commit: f74c208
+- Tests (mock-only): `.venv/bin/pytest tests/example -m "not real_llm"`
+- Next: Milestone B 继续：把 workflow_generator 的示例/runner 统一补齐 `assigned_expert_name`（若仍有直接 submit 的入口），并考虑将 `pyproject.toml` 的 pytest `testpaths` 逐步迁移到 `tests/`（需要一个独立 commit 处理历史 `test/` 目录）。
