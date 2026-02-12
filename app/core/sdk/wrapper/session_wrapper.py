@@ -45,6 +45,15 @@ class SessionWrapper:
                 f"Unsupported message type {type(message)} to submit to the multi-agent system"
             )
 
+        # (1.5) single-expert mode: auto-bind the entry expert when not specified
+        if not text_message.get_assigned_expert_name():
+            try:
+                experts = AgentService.instance.leader.state.list_experts()
+            except Exception:
+                experts = []
+            if len(experts) == 1:
+                text_message.set_assigned_expert_name(experts[0].get_profile().name)
+
         # (2) get chat history (text messages), and it will be used as the context of the job
         session_id: str = self._session.id
 

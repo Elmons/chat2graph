@@ -69,10 +69,35 @@ class AgenticService(metaclass=Singleton):
         """Get the session, if not exists or session_id is None, create a new one."""
         return SessionWrapper(self._session_service.get_session(session_id=session_id))
 
+    def entry_expert_name(self) -> Optional[str]:
+        """Return the entry expert name in single-expert mode.
+
+        If (and only if) the current multi-agent system has exactly one Expert,
+        treat it as the entry container and return its profile name. Otherwise,
+        return None and require callers to set assigned_expert_name explicitly.
+        """
+        try:
+            leader = self._agent_service.leader
+        except Exception:
+            return None
+
+        experts = leader.state.list_experts()
+        if len(experts) == 1:
+            return experts[0].get_profile().name
+        return None
+
+    def _ensure_assigned_expert_name(self, message: TextMessage) -> None:
+        if message.get_assigned_expert_name():
+            return
+        entry_name = self.entry_expert_name()
+        if entry_name:
+            message.set_assigned_expert_name(entry_name)
+
     def execute(self, message: Union[TextMessage, str]) -> ChatMessage:
         """Execute the service synchronously."""
         if isinstance(message, str):
             message = TextMessage(message)
+        self._ensure_assigned_expert_name(message)
 
         job = Job(
             goal=message.get_payload(),

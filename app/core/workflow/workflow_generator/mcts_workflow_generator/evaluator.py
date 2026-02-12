@@ -136,9 +136,15 @@ class LLMEvaluator(Evaluator):
             try:
                 sys.stdout = Blackhole()
                 jobs: List[tuple[Row, JobWrapper]] = []
+                entry_expert_name = agent_sys.entry_expert_name()
+                if not entry_expert_name:
+                    raise ValueError(
+                        "LLMEvaluator requires single-expert mode (or explicit assigned_expert_name) "
+                        "to avoid Leader decomposition."
+                    )
                 # Submit jobs for the current batch
                 for data in batch:
-                    message = TextMessage(payload=data.task)
+                    message = TextMessage(payload=data.task, assigned_expert_name=entry_expert_name)
                     jobs.append((data, agent_sys.session().submit(message)))
 
                 # Collect results and score them
