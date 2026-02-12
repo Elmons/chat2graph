@@ -135,3 +135,8 @@
 - Commit: 92662f2
 - Tests (mock-only): `.venv/bin/pytest -m "not real_llm"`
 - Next: 继续筛选并迁移其它不依赖外部服务的 legacy 单测；对依赖外部服务/已失效路径的 legacy 用例做 opt-in 或重写为 mock。
+
+- What: 迁移纯逻辑单测：将 artifact graph 增量合并相关测试从 `test/unit/` 移到 `tests/example/`，并重写为不依赖 `init_server()`/DB 的纯函数测试（直接调用 `_increment_content`）。
+- Commit: 5b3ad8f
+- Tests (mock-only): `.venv/bin/pytest -m "not real_llm"`
+- Next: 继续迁移不依赖外部服务的 legacy 单测；剩余依赖 DB/MCP/失效模块的用例需要单独评估（opt-in 或重写）。
