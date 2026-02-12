@@ -85,3 +85,8 @@
 - Commit: a0bda9f
 - Tests (mock-only): `.venv/bin/pytest tests/example -m "not real_llm"`
 - Next: 将 `main_expert_name` 从硬编码提升为贯穿 MCTS 组件的配置（expander/evaluator/validator/init template），并补充更严格的引用校验（比如 operators 去重/必备字段）。
+
+- What: 将 `main_expert_name` 贯穿 MCTS 组件：Expander/Prompt/Evaluator/Generator 都以配置驱动并做一致性校验（避免未来改名导致隐式分解或校验失效）。
+- Commit: f398f90
+- Tests (mock-only): `.venv/bin/pytest tests/example -m "not real_llm"`
+- Next: 把 init template 的 expert 名称也参数化（或在生成器里自动从模板读取并设置 `main_expert_name`），再继续做单尾约束/引用校验的增强（例如 operator 字段完整性、workflow 引用唯一性）。
