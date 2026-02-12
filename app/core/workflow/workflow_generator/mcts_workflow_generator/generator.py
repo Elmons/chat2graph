@@ -19,6 +19,9 @@ from app.core.workflow.workflow_generator.mcts_workflow_generator.model import (
 )
 from app.core.workflow.workflow_generator.mcts_workflow_generator.selector import Selector
 from app.core.workflow.workflow_generator.mcts_workflow_generator.utils import load_config_dict
+from app.core.workflow.workflow_generator.mcts_workflow_generator.validator import (
+    validate_workflow_yaml,
+)
 
 
 class MCTSWorkflowGenerator(WorkflowGenerator):
@@ -240,6 +243,14 @@ class MCTSWorkflowGenerator(WorkflowGenerator):
                         f.write("\n\n")
             except Exception:
                 print("[run]exception while saving workflow")
+                continue
+
+            validation = validate_workflow_yaml(new_flow_path)
+            if not validation.ok:
+                print(
+                    "[run]candidate workflow.yml failed validation, "
+                    f"round={round_num}, errors={validation.errors}"
+                )
                 continue
 
             # Evaluate the new node
