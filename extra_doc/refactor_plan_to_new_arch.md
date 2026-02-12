@@ -286,6 +286,58 @@ flowchart TB
   - 每进程独立 `APP_ROOT/DATABASE_URL`（避免 SQLite 写锁与数据串扰）
   - 在 import `app.core.dal.database` 前就设置好相关 env（否则 engine 已固定）
 
+### Milestone I：离线 YAML 评测流水线（Benchmark Harness）
+
+**目标**：为了对比不同“构造 YAML 的方法”（本系统搜索算法 / Codex / Claude Code / CoT 等）生成的 agent YAML 配置优劣，实现一个独立的评测 pipeline，用同一数据集与同一数据库连接，对**已生成 YAML 文件**进行统一评估与出榜。
+
+#### I.1 评测系统输入/输出
+
+输入：
+- 数据集 `WorkflowTrainDataset`（或等价的 dataset 文件路径）
+- 待评测 YAML 文件路径（一个或多个）
+- 数据库连接配置（GraphDb 连接参数）
+
+输出：
+- 每个 YAML 的评测产物：`results.json`（逐样本输出）、`summary.json`（汇总指标）、`run_meta.json`（运行元信息）
+- 总榜单：`leaderboard.json` / `leaderboard.csv`（按指标排序，可选）
+
+#### I.2 评测约束（保证对比公平与可复现）
+
+1) **强制单 Expert 入口执行**  
+   - 评测时需要绑定 `assigned_expert_name`，否则会触发 Leader 分解路径，导致评测对象不再是“该 YAML 的 operators 编排”。  
+   - 推荐：评测器自动发现入口 expert（仅 1 个 expert 时自动取其 name），并自动补齐 message 的 `assigned_expert_name`。
+
+2) **评估隔离**  
+   - 复用 Milestone H 的策略：每个 YAML 评测前 reset 单例缓存（或用子进程隔离），避免跨 YAML/跨 round 状态污染。
+
+3) **统一工具集 U（可选但强烈建议）**  
+   - 为了横向对比，建议固定一个评测 toolset（例如 `graph_only.yml`），并对 YAML 做校验：只能引用该 toolset 的 actions/tools。  
+   - 如需兼容外部 YAML：可提供 `--toolset` + “装配器”把 toolset 注入（但需要在报告里记录是否发生装配/改写）。
+
+#### I.3 指标设计（先覆盖最关键的）
+
+建议至少输出：
+- `avg_score`：数据集平均分（当前可沿用 LLM scoring；后续如引入可执行 verifier，再升级为确定性评分）
+- `success_rate`：无报错执行比例
+- `avg_latency`：每条样本平均耗时（可选）
+- `token_usage`：调用成本（如果 runtime 能取到；暂时可先不做）
+- `error_breakdown`：按 error type 聚合（load 失败 / tool 调用失败 / 超时等）
+
+#### I.4 建议落点（实现入口与代码组织）
+
+建议新增一个独立入口（CLI/脚本皆可）：
+- 新增 `app/core/workflow/evaluation/eval_yaml_pipeline.py`（或 `app/core/workflow/evaluation/cli.py`）
+  - `evaluate_yaml(dataset, yaml_path, graph_db_config, out_dir, toolset_path=None, main_expert_name=None)`
+  - `evaluate_many(yaml_paths, ...) -> leaderboard`
+
+复用/调用现有组件：
+- `app/core/workflow/workflow_generator/mcts_workflow_generator/evaluator.py`：抽出可复用的“执行 + 评分”逻辑（或把它下沉为 `Runner`）
+- `app/core/workflow/workflow_generator/mcts_workflow_generator/utils.py`：复用 `load_agentic_service(...)`，并在需要时走 toolset 装配
+
+验收建议（先做最小闭环）：
+- 给定任意一个 YAML（例如你让 Codex/Claude 生成的“图数据库查询智能体系统” YAML），能跑完 dataset 并产出 summary
+- 同一 YAML 重复运行结果稳定（至少不会因为单例残留导致大幅波动）
+
 ---
 
 ## 5. 验收标准（本轮）
@@ -297,6 +349,7 @@ flowchart TB
 5) 单 Expert 模式下，用户对话不必手动指定 `assigned_expert_name` 也能稳定命中入口 Expert
 6) toolset(U) 可切换，默认不依赖 BrowserUse MCP
 7) 评估结果可复现：每轮评估前 runtime 状态被 reset，不会因单例残留导致 round 间污染
+8) 离线 YAML 评测流水线可用：输入 dataset+yaml+db，输出 results/summary/leaderboard，支持对比多种 YAML 生成方法
 
 ---
 
