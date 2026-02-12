@@ -115,3 +115,8 @@
 - Commit: 02ad207
 - Tests (mock-only): `.venv/bin/pytest -m "not real_llm"`
 - Next: 将 `test/unit` 下仍有价值的用例按模块迁移到 `tests/`（建议 `tests/unit/`），并在迁移过程中把所有外部依赖（LLM/MCP/DB）测试都改为 opt-in。
+
+- What: 迁移纯工具函数单测：将 `parse_jsons` 的单元测试从 `test/unit/` 移到 `tests/example/`，确保在新测试约定下仍覆盖 JSON 清洗/placeholder 等逻辑。
+- Commit: c195ec3
+- Tests (mock-only): `.venv/bin/pytest -m "not real_llm"`
+- Next: 继续迁移其他纯逻辑用例（例如 `test_system_env.py`），并对依赖外部服务的 legacy 用例进行 opt-in 或重写为 mock。
