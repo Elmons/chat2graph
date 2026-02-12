@@ -47,12 +47,13 @@ class LLMExpander(Expander):
     Lastly, use another LLM call to optimize expert definitions guided by the selected actions.
     """
 
-    def __init__(self) -> None:
+    def __init__(self, main_expert_name: str = "Main Expert") -> None:
         """Initialise LLM-backed expander helpers and prompt metadata."""
         super().__init__()
         self._llm: ModelService = ModelServiceFactory.create(
             model_platform_type=SystemEnv.MODEL_PLATFORM_TYPE
         )
+        self.main_expert_name = main_expert_name
         self.max_retry = 5  # max retry for llm calls
         self.all_context_section = [  # all context sections of the agentic workflow configuration.
             "task description",
@@ -311,6 +312,7 @@ class LLMExpander(Expander):
         prompt = optimize_expert_prompt_template.format(
             context=context,
             optimize_actions=optimize_acitons,
+            main_expert_name=self.main_expert_name,
         )
         
         # filter function to validate LLM output.
@@ -362,9 +364,13 @@ class LLMExpander(Expander):
                             )
 
                     profile = expert.get("profile", None)
-                    if not isinstance(profile, Dict) or profile.get("name") != "Main Expert":
+                    if (
+                        not isinstance(profile, Dict)
+                        or profile.get("name") != self.main_expert_name
+                    ):
                         error_messages.append(
-                            "single-expert mode requires expert profile.name == 'Main Expert'"
+                            "single-expert mode requires expert profile.name == "
+                            f"{self.main_expert_name!r}"
                         )
 
                     expert_workflow = expert.get("workflow", None)

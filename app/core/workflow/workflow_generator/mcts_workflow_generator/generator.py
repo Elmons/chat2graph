@@ -35,6 +35,7 @@ class MCTSWorkflowGenerator(WorkflowGenerator):
         expander: Expander,
         evaluator: Evaluator,
         optimize_grain: List[AgenticConfigSection],
+        main_expert_name: str = "Main Expert",
         init_template_path: str = (
             "app/core/workflow/workflow_generator/mcts_workflow_generator/"
             "init_template/basic_template.yml"
@@ -61,6 +62,7 @@ class MCTSWorkflowGenerator(WorkflowGenerator):
         self.logs: dict[int, WorkflowLogFormat] = {}
         self.optimize_grain = optimize_grain
         self.init_template_path = init_template_path
+        self.main_expert_name = main_expert_name
         self.init_config_dict: Dict[str, str] = {}
         self.max_score: float = -1
         self.optimal_round = 0
@@ -77,6 +79,13 @@ class MCTSWorkflowGenerator(WorkflowGenerator):
         shutil.copy2(self.init_template_path, workflow_file)
 
         print(f"Initialized default workflow at: {workflow_file}")
+        validation = validate_workflow_yaml(
+            workflow_file, main_expert_name=self.main_expert_name
+        )
+        if not validation.ok:
+            raise ValueError(
+                f"init_template workflow.yml failed validation: {validation.errors}"
+            )
 
         config_dict = self.load_config_dict(round_num=1, skip_section=None)
         for section in AgenticConfigSection:
@@ -245,7 +254,9 @@ class MCTSWorkflowGenerator(WorkflowGenerator):
                 print("[run]exception while saving workflow")
                 continue
 
-            validation = validate_workflow_yaml(new_flow_path)
+            validation = validate_workflow_yaml(
+                new_flow_path, main_expert_name=self.main_expert_name
+            )
             if not validation.ok:
                 print(
                     "[run]candidate workflow.yml failed validation, "

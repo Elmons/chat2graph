@@ -66,3 +66,26 @@ experts:
     assert not result.ok
     assert any("cycle" in e for e in result.errors)
 
+
+def test_validator_accepts_custom_main_expert_name(tmp_path: Path) -> None:
+    ok = tmp_path / "ok.yml"
+    ok.write_text(
+        """
+app: {name: "x"}
+plugin: {workflow_platform: "BUILTIN"}
+reasoner: {type: "DUAL"}
+tools: []
+actions: []
+toolkit: []
+operators:
+  - &op1 {instruction: "1", output_schema: "a:1", actions: []}
+  - &op2 {instruction: "2", output_schema: "a:2", actions: []}
+experts:
+  - profile: {name: "Entry", desc: "d"}
+    workflow:
+      - [*op1, *op2]
+""".lstrip(),
+        encoding="utf-8",
+    )
+    result = validate_workflow_yaml(ok, main_expert_name="Entry")
+    assert result.ok, result.errors

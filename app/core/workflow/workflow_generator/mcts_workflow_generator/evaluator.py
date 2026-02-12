@@ -50,7 +50,7 @@ class Blackhole:
 class LLMEvaluator(Evaluator):
     """Leverage LLMs to score workflow executions and reflect on outcomes."""
 
-    def __init__(self, need_reflect: bool = True):
+    def __init__(self, need_reflect: bool = True, main_expert_name: str = "Main Expert"):
         """Initialise the evaluator with a backing model service."""
         super().__init__()
         self._llm: ModelService = ModelServiceFactory.create(
@@ -58,6 +58,7 @@ class LLMEvaluator(Evaluator):
         )
         self.job_id = "[LLMEvaluator]"
         self.need_reflect = need_reflect
+        self.main_expert_name = main_expert_name
 
     async def evaluate_workflow(
         self,
@@ -141,6 +142,11 @@ class LLMEvaluator(Evaluator):
                     raise ValueError(
                         "LLMEvaluator requires single-expert mode (or explicit assigned_expert_name) "
                         "to avoid Leader decomposition."
+                    )
+                if entry_expert_name != self.main_expert_name:
+                    raise ValueError(
+                        "LLMEvaluator main_expert_name mismatch: "
+                        f"expected {self.main_expert_name!r}, got {entry_expert_name!r}"
                     )
                 # Submit jobs for the current batch
                 for data in batch:
