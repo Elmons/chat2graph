@@ -80,3 +80,8 @@
 - Commit: 97ab25e
 - Tests (mock-only): `.venv/bin/pytest tests/example -m "not real_llm"`
 - Next: Milestone C 继续：增加候选 YAML 校验（expert 数量/name + workflow 单尾约束 + operator 引用合法性），并在生成器侧落地 main_expert_name 配置贯穿 expander/evaluator。
+
+- What: Milestone C（继续）：新增候选 workflow.yml 校验器（single expert + DAG + 单 tail + operator 引用合法），并在 MCTSGenerator 保存候选后、评估前强制校验，减少无效 round 进入执行/评估。
+- Commit: a0bda9f
+- Tests (mock-only): `.venv/bin/pytest tests/example -m "not real_llm"`
+- Next: 将 `main_expert_name` 从硬编码提升为贯穿 MCTS 组件的配置（expander/evaluator/validator/init template），并补充更严格的引用校验（比如 operators 去重/必备字段）。
