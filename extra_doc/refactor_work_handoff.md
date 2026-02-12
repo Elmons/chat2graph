@@ -75,3 +75,8 @@
 - Commit: a0ce714
 - Tests (mock-only): `.venv/bin/pytest tests/example -m "not real_llm"`
 - Next: Milestone C：约束 Expander（只允许 1 个 expert 且 name 固定为 Main Expert），并在候选 YAML 校验中检查 expert 数量/name/单尾约束，减少无效 round。
+
+- What: Milestone C（部分）：约束 expander 的专家生成逻辑为单 Expert 模式（必须且只能输出一个 `Main Expert`），并在 prompt 与解析 filter 中加硬约束，避免生成多 expert 导致 Leader 分解语义回流。
+- Commit: 97ab25e
+- Tests (mock-only): `.venv/bin/pytest tests/example -m "not real_llm"`
+- Next: Milestone C 继续：增加候选 YAML 校验（expert 数量/name + workflow 单尾约束 + operator 引用合法性），并在生成器侧落地 main_expert_name 配置贯穿 expander/evaluator。
