@@ -125,3 +125,8 @@
 - Commit: 65e04da
 - Tests (mock-only): `.venv/bin/pytest -m "not real_llm"`
 - Next: 继续迁移 `test_system_env.py` 等纯逻辑单测；以及按硬约束 6 继续推进“toolset YAML 外部化”（当前仅移除了默认 MCP 依赖，但工具集仍在模板中硬编码）。
+
+- What: 按硬约束 6 外部化 toolset：新增 `toolsets/default.yml`（无 MCP），新增 `init_template/base_template.yml`（仅基础运行时），并在 `MCTSWorkflowGenerator` 启动时组装 base+toolset 生成 round1 workflow；默认 init_template 切换为 base_template。
+- Commit: f0efee1
+- Tests (mock-only): `.venv/bin/pytest -m "not real_llm"`
+- Next: 继续迁移 `test_system_env.py` 等纯逻辑单测到 `tests/example/`；并补充一条约定：legacy `test/` 目录暂不默认收集，迁移完成后再清理。
