@@ -105,3 +105,8 @@
 - Commit: baeb776
 - Tests (mock-only): `.venv/bin/pytest tests/example -m "not real_llm"`
 - Next: 把 `test/example/test_minimal_sdk_yaml.py` 迁移到 `tests/example/`（并移除旧路径），再评估是否需要把 `pyproject.toml` 的 pytest `testpaths` 调整为 `tests`（独立 commit，避免影响现有 CI）。
+
+- What: 迁移 minimal SDK YAML 测试到 `tests/example/`，并保持 real-LLM 用例为 opt-in（`real_llm` + `CHAT2GRAPH_RUN_REAL_LLM_TESTS=1`）。
+- Commit: 743edb2
+- Tests (mock-only): `.venv/bin/pytest tests/example -m "not real_llm"`
+- Next: 评估是否将 pytest `testpaths` 从 `test` 迁移到 `tests`（独立 commit），并逐步把 `test/unit` 下的用例也迁移到 `tests/example`（或建立 `tests/unit` 子目录并更新约定）。
