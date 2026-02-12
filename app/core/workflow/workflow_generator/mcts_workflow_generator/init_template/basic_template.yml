@@ -99,21 +99,6 @@ tools:
     type: "LOCAL_TOOL"
     module_path: "app.plugin.neo4j.resource.question_answering"
 
-  - &browser_tool
-    name: "BrowserUsing"
-    type: "MCP"
-    mcp_transport_config:
-      transport_type: "SSE"
-      url: "http://localhost:8931/sse"
-
-  - &file_tool
-    name: "FileTool"
-    type: "MCP"
-    mcp_transport_config:
-      transport_type: "STDIO"
-      command: "npx"
-      args: ["@modelcontextprotocol/server-filesystem", "."]
-
   - &system_status_checker_tool
     name: "SystemStatusChecker"
     type: "LOCAL_TOOL"
@@ -280,13 +265,13 @@ actions:
     name: "web_research"
     desc: "Conduct comprehensive web research using browser tools to collect information from authoritative web sources. Can execute multiple browsing tasks and dynamically adjust search strategies based on findings. (Requires calling one or more tools)."
     tools:
-      - *browser_tool
+      - {name: "BrowserUsing"}
 
   - &reference_listing_action
     name: "reference_listing"
     desc: "Return the original text and web links involved in the reasoning process in Markdown format for easy display."
     tools:
-      - *file_tool
+      - {name: "FileTool"}
 
   # job decomposition actions
   - &query_system_status_action
@@ -329,9 +314,22 @@ toolkit:
   - [*reference_listing_action]
   - [*query_system_status_action, *job_decomposition_action]
 
-operators: []
+operators:
+  - &qa_operator
+    instruction: |
+      You are a helpful assistant.
+      Respond directly and concisely to the user's message.
+      If the user greets (e.g., "hi"), greet back.
+    output_schema: |
+      answer: The final answer text.
+    actions: []
 
-experts: []
+experts:
+  - profile:
+      name: "Main Expert"
+      desc: "Single entry expert (container) for workflow generation."
+    workflow:
+      - - *qa_operator
 
 
 knowledgebase: {}
