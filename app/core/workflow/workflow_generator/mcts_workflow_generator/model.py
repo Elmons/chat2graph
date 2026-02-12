@@ -1,5 +1,5 @@
 from enum import Enum
-from typing import Dict, List, Literal
+from typing import Dict, List, Literal, Optional
 
 from pydantic import BaseModel
 
@@ -27,6 +27,7 @@ class OptimizeAction(BaseModel):
 class WorkflowLogFormat(BaseModel):
     """Log format for each workflow optimization round."""
     round_number: int
+    parent_round: Optional[int] = None
     score: float
     optimize_suggestions: List[OptimizeAction] = []
     modifications: List[str]  

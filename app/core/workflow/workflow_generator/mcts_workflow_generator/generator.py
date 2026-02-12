@@ -133,6 +133,7 @@ class MCTSWorkflowGenerator(WorkflowGenerator):
         """Record feedback from a child round in its parent log entry."""
         self.logs[parent_round].feedbacks.append(
             {
+                "child_round": f"{current_round}",
                 "modification": f"{self.logs[current_round].modifications}",
                 "after_score": f"{self.logs[current_round].score}",
                 "reflection": self.logs[current_round].reflection,
@@ -145,6 +146,7 @@ class MCTSWorkflowGenerator(WorkflowGenerator):
         save_dir = Path(self.optimized_path) / "log"
         save_dir.mkdir(parents=True, exist_ok=True)
         log_file = save_dir / "log.json"
+        edges_file = save_dir / "edges.json"
         config_file = save_dir / "config.json"
         with open(log_file, "w", encoding="utf-8") as f:
             logs = [v.model_dump(mode="json") for k, v in self.logs.items()]
@@ -154,6 +156,19 @@ class MCTSWorkflowGenerator(WorkflowGenerator):
                 ensure_ascii=False,
                 indent=2,
             )
+
+        edges = []
+        for log in self.logs.values():
+            if log.parent_round is None:
+                continue
+            edges.append(
+                {
+                    "parent_round": log.parent_round,
+                    "child_round": log.round_number,
+                }
+            )
+        with open(edges_file, "w", encoding="utf-8") as f:
+            json.dump(edges, f, ensure_ascii=False, indent=2)
 
         with open(config_file, "w", encoding="utf-8") as f:
             config = [
@@ -202,6 +217,7 @@ class MCTSWorkflowGenerator(WorkflowGenerator):
         )
         self.logs[1] = WorkflowLogFormat(
             round_number=1,
+            parent_round=None,
             score=score,
             reflection=reflection,
             modifications=[],
@@ -284,6 +300,7 @@ class MCTSWorkflowGenerator(WorkflowGenerator):
             # save result
             self.logs[round_num] = WorkflowLogFormat(
                 round_number=round_num,
+                parent_round=select_round.round_number,
                 score=score,
                 reflection=reflection,
                 modifications=optimize_resp.modifications,
