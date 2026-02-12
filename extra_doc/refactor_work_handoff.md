@@ -70,3 +70,8 @@
 - Commit: f74c208
 - Tests (mock-only): `.venv/bin/pytest tests/example -m "not real_llm"`
 - Next: Milestone B 继续：把 workflow_generator 的示例/runner 统一补齐 `assigned_expert_name`（若仍有直接 submit 的入口），并考虑将 `pyproject.toml` 的 pytest `testpaths` 逐步迁移到 `tests/`（需要一个独立 commit 处理历史 `test/` 目录）。
+
+- What: 修复 MCTS workflow_generator 的 init template：提供可执行的单 Expert（Main Expert）入口，并移除默认 MCP 工具定义（BrowserUsing/FileTool），避免环境不可用时初始化失败；补充模板结构断言测试。
+- Commit: a0ce714
+- Tests (mock-only): `.venv/bin/pytest tests/example -m "not real_llm"`
+- Next: Milestone C：约束 Expander（只允许 1 个 expert 且 name 固定为 Main Expert），并在候选 YAML 校验中检查 expert 数量/name/单尾约束，减少无效 round。
