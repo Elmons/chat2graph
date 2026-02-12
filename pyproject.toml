@@ -19,7 +19,10 @@ chromadb = "^1.0.12"
 neo4j = "^5.28.1"
 sqlalchemy-utils = "^0.41.2"
 matplotlib = "^3.10.3"
-memfuse = "^0.3.3"
+# memfuse conflicts with dbgpt on aiohttp version:
+# - memfuse requires aiohttp>=3.11.18
+# - dbgpt 0.7.x requires aiohttp==3.8.4
+# Keep memfuse disabled in this env when enabling dbgpt.
 networkx = "^3.4.2"
 mcp = "^1.9.3"
 pyfiglet = "^1.0.3"
@@ -58,8 +61,8 @@ pytest-cov = "6.2.1"
 pytest-mock = "^3.14.1"
 
 [tool.poetry.group.db-gpt.dependencies]
-# dbgpt = { version = "0.7.3", extras = ["agent", "simple_framework", "framework"] }
-# dbgpt-ext = { version = "0.7.3", extras = ["rag", "graph_rag", "storage_chromadb"] }
+dbgpt = { version = "0.7.3", extras = ["agent", "simple_framework", "framework"] }
+dbgpt-ext = { version = "0.7.3", extras = ["rag", "graph_rag", "storage_chromadb"] }
 
 [tool.ruff]
 line-length = 100
@@ -98,6 +101,19 @@ testpaths = ["test"]
 python_files = ["test_*.py"]
 addopts = "-v"
 asyncio_mode = "auto"  # Enable asyncio mode
+filterwarnings = [
+    # SQLAlchemy 2.x deprecations from transitive deps / older patterns
+    "ignore:The Query.get\\(\\) method is considered legacy.*:sqlalchemy.exc.LegacyAPIWarning",
+
+    # Pydantic v2 deprecations emitted by third-party libs (e.g., litellm integrations)
+    "ignore:Support for class-based `config` is deprecated.*",
+
+    # Pydantic v2 serializer warnings emitted by third-party response/model shims
+    "ignore:Pydantic serializer warnings.*:UserWarning",
+
+    # importlib-resources legacy helper used by some deps
+    "ignore:open_text is deprecated.*:DeprecationWarning",
+]
 markers = [
     "asyncio: mark test as async"
 ]

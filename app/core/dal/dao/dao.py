@@ -51,7 +51,7 @@ class Dao(Generic[T], metaclass=Singleton):
 
     def get_by_id(self, id: str) -> Optional[T]:
         """Get an object by ID."""
-        return self.session.query(self._model).get(id)
+        return self.session.get(self._model, id)
 
     def filter_by(self, **kwargs: Any) -> List[T]:
         """Filter objects."""

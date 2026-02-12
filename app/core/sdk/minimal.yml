@@ -1,0 +1,26 @@
+app:
+  name: "Chat2Graph Minimal"
+  desc: "Minimal SDK config (no MCP/toolkit)"
+  version: "0.0.1"
+
+plugin:
+  workflow_platform: "BUILTIN"
+
+# Keep the default DUAL reasoner unless you want MONO.
+reasoner:
+  type: "DUAL"
+
+# No tools/actions/toolkit to avoid MCP initialization.
+# (You can add them back later once MCP is stable.)
+experts:
+  - profile:
+      name: "Q&A Expert"
+      desc: "Minimal expert for plain chat."
+    workflow:
+      - - instruction: |
+            You are a helpful assistant.
+            Respond directly and concisely to the user's message.
+            If the user greets (e.g., "hi"), greet back.
+          output_schema: |
+            answer: The final answer text.
+          actions: []

@@ -29,6 +29,25 @@ class LiteLlmClient(ModelService):
         self._max_tokens: int = SystemEnv.MAX_TOKENS
         self._max_completion_tokens: int = SystemEnv.MAX_COMPLETION_TOKENS
 
+    @staticmethod
+    def _ensure_aiohttp_compat() -> None:
+        """Patch aiohttp symbols expected by newer LiteLLM transports.
+
+        dbgpt currently pins aiohttp to 3.8.4, while LiteLLM may reference
+        exceptions introduced in later aiohttp versions.
+        """
+        try:
+            import aiohttp
+        except Exception:
+            return
+
+        # liteLLM's aiohttp transport maps these exception symbols; provide
+        # backward-compatible aliases for older aiohttp versions.
+        if not hasattr(aiohttp, "ConnectionTimeoutError"):
+            aiohttp.ConnectionTimeoutError = aiohttp.ServerTimeoutError  # type: ignore[attr-defined]
+        if not hasattr(aiohttp, "SocketTimeoutError"):
+            aiohttp.SocketTimeoutError = aiohttp.ServerTimeoutError  # type: ignore[attr-defined]
+
     async def generate(
         self,
         sys_prompt: str,
@@ -42,6 +61,7 @@ class LiteLlmClient(ModelService):
             sys_prompt=sys_prompt, messages=messages, tools=tools
         )
 
+        self._ensure_aiohttp_compat()
         from litellm import completion
         from litellm.litellm_core_utils.streaming_handler import CustomStreamWrapper
         from litellm.types.utils import ModelResponse, StreamingChoices

@@ -1,6 +1,6 @@
 import importlib
 from pathlib import Path
-from typing import Any, Dict, List, Optional, Tuple, Union, cast
+from typing import Any, Dict, List, Optional, Tuple, Union
 
 from app.core.agent.expert import Expert
 from app.core.agent.leader import Leader
@@ -13,7 +13,7 @@ from app.core.dal.init_db import init_db
 from app.core.model.agentic_config import AgenticConfig, ExpertConfig, LocalToolConfig
 from app.core.model.graph_db_config import GraphDbConfig
 from app.core.model.job import Job
-from app.core.model.message import ChatMessage, MessageType, TextMessage
+from app.core.model.message import ChatMessage, HybridMessage, TextMessage
 from app.core.prompt.job_decomposition import (
     JOB_DECOMPOSITION_OUTPUT_SCHEMA,
     JOB_DECOMPOSITION_PROMPT,
@@ -84,13 +84,11 @@ class AgenticService(metaclass=Singleton):
         # execute the job
         job_wrapper.execute()
 
-        # get the result of the job
-        result_message: TextMessage = cast(
-            TextMessage,
-            self._message_service.get_message_by_job_id(
-                job_id=job_wrapper.job.id, message_type=MessageType.TEXT_MESSAGE
-            ),
-        )
+        # wait until the original job result has been assembled and persisted
+        # (JobService.query_original_job_result is invoked inside JobWrapper.wait)
+        result_message = job_wrapper.wait()
+        if isinstance(result_message, HybridMessage):
+            return result_message.get_instruction_message()
         return result_message
 
     def reasoner(self, reasoner_type: ReasonerType = ReasonerType.DUAL) -> "AgenticService":

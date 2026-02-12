@@ -439,7 +439,10 @@ toolkit:
   - [*reference_listing_action]
   - [*query_system_status_action, *job_decomposition_action]
   # ----- gaia benchmark toolkit -----
-  - [*browser_using_action, *navigate_browser_action, *visual_view_page_action, *get_browser_state_action, *analyze_multimodal_content_action]
+  # Disabled by default: `BrowserTool` (uvx browser-use --mcp) can block startup
+  # on some environments, causing Flask server not to bind 5010.
+  # Re-enable this chain after browser-use MCP is confirmed healthy.
+  # - [*browser_using_action, *navigate_browser_action, *visual_view_page_action, *get_browser_state_action, *analyze_multimodal_content_action]
   - [*file_operation_action, *write_python_code_action, *execute_python_code_action, *execute_shell_command_action, *process_spreadsheet_action, *handle_zip_file_action, *analyze_multimodal_content_action]
   # ----- gaia benchmark toolkit end -----
 
@@ -875,17 +878,19 @@ experts:
       - [*retrieval_operator, *summary_operator]
 
   # ----- gaia benchmark experts -----
-  - profile:
-      name: "WebSurferExpert"
-      desc: |
-        **Capabilities**: Responsible for all online information acquisition tasks. Can use a browser to search, browse web pages, and retrieve content. **Also possesses multimodal analysis capabilities** to process images, audio, and PDF files encountered on web pages or specified by a URL. **Cannot** manipulate local files or execute code.
-        **Expected Input**: A sub-task that requires web searching to be resolved. For example: "Find the latest news about..." or "Analyze the content of this URL 'http://example.com/report.pdf'."
-        **Expected Output**: Text containing `information` (the information found) and `sources_used` (a list of URLs visited).
-    reasoner:
-      actor_name: "WebSurferToolActor"
-      thinker_name: "WebSurferThinker"
-    workflow:
-      - [*browser_using_operator]
+  # Disabled by default: depends on BrowserTool (uvx browser-use --mcp), which may
+  # block service startup in some environments.
+  # - profile:
+  #     name: "WebSurferExpert"
+  #     desc: |
+  #       **Capabilities**: Responsible for all online information acquisition tasks. Can use a browser to search, browse web pages, and retrieve content. **Also possesses multimodal analysis capabilities** to process images, audio, and PDF files encountered on web pages or specified by a URL. **Cannot** manipulate local files or execute code.
+  #       **Expected Input**: A sub-task that requires web searching to be resolved. For example: "Find the latest news about..." or "Analyze the content of this URL 'http://example.com/report.pdf'."
+  #       **Expected Output**: Text containing `information` (the information found) and `sources_used` (a list of URLs visited).
+  #   reasoner:
+  #     actor_name: "WebSurferToolActor"
+  #     thinker_name: "WebSurferThinker"
+  #   workflow:
+  #     - [*browser_using_operator]
 
   - profile:
       name: "DeveloperExpert"
