@@ -344,6 +344,10 @@ class LLMExpander(Expander):
                 expert_list = ast.literal_eval(experts_format)
 
                 error_messages: List[str] = []
+                if len(expert_list) != 1:
+                    error_messages.append(
+                        f"single-expert mode requires exactly 1 expert, got {len(expert_list)}"
+                    )
                 for expert in expert_list:
                     if not isinstance(expert, Dict):
                         error_messages.append(
@@ -356,6 +360,12 @@ class LLMExpander(Expander):
                             error_messages.append(
                                 f"invalid expert: {expert}, it must contain `{field}` field."
                             )
+
+                    profile = expert.get("profile", None)
+                    if not isinstance(profile, Dict) or profile.get("name") != "Main Expert":
+                        error_messages.append(
+                            "single-expert mode requires expert profile.name == 'Main Expert'"
+                        )
 
                     expert_workflow = expert.get("workflow", None)
                     if not isinstance(expert_workflow, List):
