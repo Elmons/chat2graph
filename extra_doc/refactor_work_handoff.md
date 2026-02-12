@@ -120,3 +120,8 @@
 - Commit: c195ec3
 - Tests (mock-only): `.venv/bin/pytest -m "not real_llm"`
 - Next: 继续迁移其他纯逻辑用例（例如 `test_system_env.py`），并对依赖外部服务的 legacy 用例进行 opt-in 或重写为 mock。
+
+- What: Milestone D（最小版本）落地：MCTS log 增加 `parent_round` 字段，并在 `log/edges.json` 输出 parent/child 边，便于重建搜索树与可视化；同时在 feedback 里补 `child_round`。
+- Commit: 65e04da
+- Tests (mock-only): `.venv/bin/pytest -m "not real_llm"`
+- Next: 继续迁移 `test_system_env.py` 等纯逻辑单测；以及按硬约束 6 继续推进“toolset YAML 外部化”（当前仅移除了默认 MCP 依赖，但工具集仍在模板中硬编码）。
