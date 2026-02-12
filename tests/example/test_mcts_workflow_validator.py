@@ -3,6 +3,7 @@ from __future__ import annotations
 from pathlib import Path
 
 from app.core.workflow.workflow_generator.mcts_workflow_generator.validator import (
+    infer_single_expert_name,
     validate_workflow_yaml,
 )
 
@@ -89,3 +90,34 @@ experts:
     )
     result = validate_workflow_yaml(ok, main_expert_name="Entry")
     assert result.ok, result.errors
+
+
+def test_infer_single_expert_name(tmp_path: Path) -> None:
+    ok = tmp_path / "ok.yml"
+    ok.write_text(
+        """
+app: {name: "x"}
+plugin: {workflow_platform: "BUILTIN"}
+reasoner: {type: "DUAL"}
+operators:
+  - &op1 {instruction: "1", output_schema: "a:1", actions: []}
+experts:
+  - profile: {name: "Entry", desc: "d"}
+    workflow:
+      - [*op1]
+""".lstrip(),
+        encoding="utf-8",
+    )
+    assert infer_single_expert_name(ok) == "Entry"
+
+    bad = tmp_path / "bad.yml"
+    bad.write_text(
+        """
+app: {name: "x"}
+experts:
+  - profile: {name: "A"}
+  - profile: {name: "B"}
+""".lstrip(),
+        encoding="utf-8",
+    )
+    assert infer_single_expert_name(bad) is None

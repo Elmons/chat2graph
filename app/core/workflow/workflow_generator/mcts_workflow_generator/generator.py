@@ -3,7 +3,7 @@ from pathlib import Path
 import random
 import shutil
 import time
-from typing import Dict, List, Tuple
+from typing import Dict, List, Optional, Tuple
 
 from app.core.service.graph_db_service import GraphDb
 from app.core.workflow.dataset_synthesis.model import Row, WorkflowTrainDataset
@@ -20,6 +20,7 @@ from app.core.workflow.workflow_generator.mcts_workflow_generator.model import (
 from app.core.workflow.workflow_generator.mcts_workflow_generator.selector import Selector
 from app.core.workflow.workflow_generator.mcts_workflow_generator.utils import load_config_dict
 from app.core.workflow.workflow_generator.mcts_workflow_generator.validator import (
+    infer_single_expert_name,
     validate_workflow_yaml,
 )
 
@@ -35,7 +36,7 @@ class MCTSWorkflowGenerator(WorkflowGenerator):
         expander: Expander,
         evaluator: Evaluator,
         optimize_grain: List[AgenticConfigSection],
-        main_expert_name: str = "Main Expert",
+        main_expert_name: Optional[str] = None,
         init_template_path: str = (
             "app/core/workflow/workflow_generator/mcts_workflow_generator/"
             "init_template/basic_template.yml"
@@ -79,9 +80,16 @@ class MCTSWorkflowGenerator(WorkflowGenerator):
         shutil.copy2(self.init_template_path, workflow_file)
 
         print(f"Initialized default workflow at: {workflow_file}")
-        validation = validate_workflow_yaml(
-            workflow_file, main_expert_name=self.main_expert_name
-        )
+        if not self.main_expert_name:
+            inferred = infer_single_expert_name(workflow_file)
+            if not inferred:
+                raise ValueError(
+                    "Cannot infer entry expert name from init_template workflow.yml; "
+                    "please pass main_expert_name explicitly."
+                )
+            self.main_expert_name = inferred
+
+        validation = validate_workflow_yaml(workflow_file, main_expert_name=self.main_expert_name)
         if not validation.ok:
             raise ValueError(
                 f"init_template workflow.yml failed validation: {validation.errors}"

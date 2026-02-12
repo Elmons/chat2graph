@@ -159,3 +159,29 @@ def validate_workflow_yaml(
 
     return WorkflowValidationResult(ok=len(errors) == 0, errors=errors)
 
+
+def infer_single_expert_name(yaml_path: str | Path) -> str | None:
+    """Infer the entry expert name when (and only when) exactly one expert exists."""
+    path = Path(yaml_path)
+    try:
+        raw = yaml.safe_load(path.read_text(encoding="utf-8"))
+    except Exception:
+        return None
+
+    if not isinstance(raw, dict):
+        return None
+
+    experts = raw.get("experts", [])
+    if not isinstance(experts, list) or len(experts) != 1:
+        return None
+
+    expert0 = experts[0]
+    if not isinstance(expert0, dict):
+        return None
+
+    profile = expert0.get("profile", {})
+    if not isinstance(profile, dict):
+        return None
+
+    name = profile.get("name")
+    return name if isinstance(name, str) and name.strip() else None
