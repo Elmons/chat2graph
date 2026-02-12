@@ -21,11 +21,18 @@ def _canonical_operator(op: Dict[str, Any]) -> Tuple[str, str, Tuple[str, ...]]:
     instruction = _as_str(op.get("instruction"))
     output_schema = _as_str(op.get("output_schema"))
     actions_raw = op.get("actions", [])
-    actions: Tuple[str, ...]
-    if isinstance(actions_raw, list) and all(isinstance(x, str) for x in actions_raw):
-        actions = tuple(actions_raw)
-    else:
-        actions = tuple()
+    action_names: List[str] = []
+    if isinstance(actions_raw, list):
+        for a in actions_raw:
+            if isinstance(a, str):
+                name = a.strip()
+                if name:
+                    action_names.append(name)
+            elif isinstance(a, dict):
+                name = a.get("name")
+                if isinstance(name, str) and name.strip():
+                    action_names.append(name.strip())
+    actions = tuple(action_names)
     return (instruction, output_schema, actions)
 
 
@@ -92,14 +99,57 @@ def validate_workflow_yaml(
 
     operator_keys = {"instruction", "output_schema", "actions"}
     canonical_ops: Dict[Tuple[str, str, Tuple[str, ...]], int] = {}
+
+    # action name registry (for operator action reference checks)
+    actions_section = raw.get("actions", [])
+    action_name_set: set[str] = set()
+    if isinstance(actions_section, list):
+        for a in actions_section:
+            if isinstance(a, dict):
+                name = a.get("name")
+                if isinstance(name, str) and name.strip():
+                    action_name_set.add(name.strip())
+
     for idx, op in enumerate(operators):
         missing = [k for k in operator_keys if k not in op]
         if missing:
             errors.append(f"operators[{idx}] missing fields: {missing}")
             continue
+        if not isinstance(op.get("instruction"), str) or not _as_str(op.get("instruction")).strip():
+            errors.append(f"operators[{idx}].instruction must be a non-empty string")
+        if (
+            not isinstance(op.get("output_schema"), str)
+            or not _as_str(op.get("output_schema")).strip()
+        ):
+            errors.append(f"operators[{idx}].output_schema must be a non-empty string")
+        if not isinstance(op.get("actions"), list):
+            errors.append(f"operators[{idx}].actions must be a list")
+        else:
+            # Validate action references when actions are declared in YAML.
+            for a in op.get("actions", []):
+                if isinstance(a, dict) and "name" in a:
+                    name = a.get("name")
+                    if isinstance(name, str) and name.strip():
+                        if action_name_set and name.strip() not in action_name_set:
+                            errors.append(
+                                f"operators[{idx}].actions references unknown action {name!r}"
+                            )
+                    else:
+                        errors.append(f"operators[{idx}].actions contains invalid action mapping")
+                elif isinstance(a, str):
+                    # tolerate string-only action names if present
+                    if action_name_set and a.strip() and a.strip() not in action_name_set:
+                        errors.append(f"operators[{idx}].actions references unknown action {a!r}")
+                else:
+                    # allow empty list, but reject unrecognized structures
+                    if a is not None:
+                        errors.append(f"operators[{idx}].actions contains invalid action ref")
+
         key = _canonical_operator(op)
         if key in canonical_ops:
-            errors.append("duplicate operator definition detected (same instruction/output_schema/actions)")
+            errors.append(
+                "duplicate operator definition detected (same instruction/output_schema/actions)"
+            )
         canonical_ops[key] = idx
 
     workflow = expert0.get("workflow", [])
