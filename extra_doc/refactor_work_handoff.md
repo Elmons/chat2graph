@@ -145,3 +145,8 @@
 - Commit: 57b1a2b
 - Tests (mock-only): `.venv/bin/pytest -m "not real_llm"`
 - Next: 继续迁移 `test/unit/` 其余测试文件到 `tests/example/`，并处理 import-time 初始化与外部依赖（MCP/DB）问题，直到 `test/` 目录不再包含测试文件。
+
+- What: 继续迁移与稳定 legacy 单测：将 `test/unit` 迁移到 `tests/example/legacy_unit`，并针对新架构（query-only、single expert、toolset 外部化）修复用例期望与 stub；同时通过 mock/patch 避免 MemFuse 与 embedding 外部请求，确保默认 `pytest` 不触网。
+- Commits: a25acd6, 20075b9, 8ff371f, d418213, 0974cf1
+- Tests (mock-only): `.venv/bin/pytest -m "not real_llm"`
+- Next: （优化项）处理当前测试告警（`asyncio` 未 await、pytest collection warning）与减少默认打印；（按需）补充/梳理 real-LLM 测试覆盖面但保持 opt-in。
