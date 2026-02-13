@@ -150,3 +150,15 @@
 - Commits: a25acd6, 20075b9, 8ff371f, d418213, 0974cf1
 - Tests (mock-only): `.venv/bin/pytest -m "not real_llm"`
 - Next: （优化项）处理当前测试告警（`asyncio` 未 await、pytest collection warning）与减少默认打印；（按需）补充/梳理 real-LLM 测试覆盖面但保持 opt-in。
+
+### 2026-02-13
+
+- What: 清理默认测试告警与执行噪声：修复 `run_async_function` 在某些线程/loop 场景复用已关闭 loop 导致的 coroutine 未 await 告警；修复 pytest collection warning（测试 stub 类被误收集）与错误的 `@pytest.mark.asyncio` 标记；将 `AgenticService.load` 与 MCTS `generate_json` 的 `print` 降级为 logger；新增 `reset_runtime_state()` 并在 `LLMEvaluator` 评估前重置单例缓存以减少 round 间污染。
+- Commit: 0f8f44c
+- Tests (mock-only): `.venv/bin/pytest -m "not real_llm"`
+- Next: Milestone I：新增离线 YAML 评测入口（dataset+yaml→results/summary/leaderboard），默认离线可跑，支持 opt-in 的 LLM 打分。
+
+- What: Milestone I（最小版本）落地：新增离线 YAML 评测入口 `app/core/workflow/evaluation/eval_yaml_pipeline.py`，支持对单个/多个 YAML 在 dataset 上运行并输出 `results.json`/`summary.json`/`leaderboard.json`；默认 `exact` 打分（离线可跑），可选 `llm` 打分（opt-in）。
+- Commit: (pending)
+- Tests (mock-only): `.venv/bin/pytest -m "not real_llm"`
+- Next: （按需）为 `llm` 打分补充 `real_llm` smoke 用例并保持 opt-in；根据实验需要补充 leaderboard 指标（耗时/错误分类等）。
