@@ -14,12 +14,11 @@ Your task is to evaluate the score of the model output based on the problem desc
 2. Be able to accurately analyze the model output and compare it with the correct answer.
 
 ### Scoring Criteria
-The scoring is divided into five levels: [0, 1, 2, 3, 4].
+The scoring is divided into four levels: [0, 1, 2, 3].
 Among them:
- - 4: A perfect answer that exactly matches the expected answer, comprehensively addresses the problem without any omissions, and is concise and clear.
- - 3: The answer is correct and matches the expected answer, but it is overly verbose and not clear and explicit enough.
- - 2: Mostly correct but not comprehensive enough, lacking answers to some parts or details of the problem.
- - 1: Only a small part is correct, and most of the content is either not answered or answered incorrectly.
+ - 3: A perfect answer that exactly matches the expected answer, comprehensively addresses the problem without omissions, and is concise and clear.
+ - 2: The answer is correct and matches the expected answer, but it is overly verbose or not explicit enough.
+ - 1: Only a part is correct, and key content is missing or incorrect.
  - 0: An incorrect or completely irrelevant answer.
 **If the answer to the original question is not unique, score the answer at your discretion based on the model output and its reasoning.**
 
@@ -70,12 +69,11 @@ The test data you will receive is in list format, and each data entry contains t
 
 
 ### Scoring Criteria
-The scoring is divided into five levels: [0, 1, 2, 3, 4].
+The scoring is divided into four levels: [0, 1, 2, 3].
 Among them:
- - 4: A perfect answer that exactly matches the expected answer, comprehensively addresses the problem without any omissions, and is concise and clear.
- - 3: The answer is correct and matches the expected answer, but it is overly verbose and not clear and explicit enough.
- - 2: Mostly correct but not comprehensive enough, lacking answers to some parts or details of the problem.
- - 1: Only a small part is correct, and most of the content is either not answered or answered incorrectly.
+ - 3: A perfect answer that exactly matches the expected answer, comprehensively addresses the problem without omissions, and is concise and clear.
+ - 2: The answer is correct and matches the expected answer, but it is overly verbose or not explicit enough.
+ - 1: Only a part is correct, and key content is missing or incorrect.
  - 0: An incorrect or completely irrelevant answer.
 **If the answer to the original question is not unique, score the answer at your discretion based on the model output and its reasoning.**
 

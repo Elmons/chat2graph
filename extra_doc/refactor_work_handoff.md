@@ -175,3 +175,22 @@
   - `.venv/bin/pytest -q tests/example/test_mcts_config_assembler.py tests/example/test_mcts_candidate_validation.py tests/example/test_mcts_expander_action_constraints.py tests/example/test_mcts_workflow_validator.py tests/example/test_mcts_init_template_single_expert.py tests/example/test_mcts_logging_edges.py tests/example/test_eval_yaml_pipeline.py`
   - `.venv/bin/pytest -m "not real_llm"`
 - Next: （按需）补 `eval_yaml_pipeline` 的 `real_llm` smoke（仍保持 opt-in），并在实验脚本中接入 `parallelism/process_isolation` 与 `graph_db_config` 参数。
+
+- What: 新增方法无关的 YAML 评测工作区 `test/example/workflow_generator/eval_suite/`，用于统一管理“不同方法生成的 YAML”评测。将示例 YAML 与评测脚本从 `codex_suite` 迁移到 `eval_suite`，并将 `yamls/` 调整为扁平结构（不再按方法子目录分层）；补充 `README.md` 说明目录约定与运行方式。
+- Commit: N/A（working tree）
+- Tests:
+  - `.venv/bin/python -m py_compile test/example/workflow_generator/eval_suite/eval_yaml_method_benchmark.py`
+  - `.venv/bin/python -m py_compile test/example/workflow_generator/run_data_example_with_single_expert_yaml.py`
+- Next: 按实验需要将算法产出的 `workflow.yml` 逐个填入 `eval_yaml_method_benchmark.py` 的 `YAML_PATH` 进行单次评测，并基于 `overview.json` 做横向对比汇总。
+
+- What: 重构评测脚本为“单 YAML、全数据集、LLM 打分、整体汇总”模式：`eval_yaml_method_benchmark.py` 不再拆 3 个子集，也不再一次跑多个 YAML；每次只评估一个 YAML，输出 `overview.json`（聚合指标）+ `results.json` + `summary.json` + `run_meta.json`。按用户要求清空历史 `eval_runs` 后重新执行了一次完整评测（3 条样本），产物目录为 `test/example/workflow_generator/eval_suite/eval_runs/20260213_153331_single_yaml_eval/`。
+- Commit: N/A（working tree）
+- Tests:
+  - `.venv/bin/python test/example/workflow_generator/eval_suite/eval_yaml_method_benchmark.py`
+- Next: 若需对多个算法 YAML 做批量实验，建议在外层脚本循环调用该单-YAML入口并聚合每次 `overview.json`，保持单次运行语义简单且可追溯。
+
+- What: 修复评测提示词分数区间冲突：将 `app/core/prompt/workflow_generator.py` 中 `eval_prompt_template` 与 `reflect_prompt_template` 的评分定义统一为 0-3（去除 0-4 文案），与 `eval_yaml_pipeline` 当前逻辑保持一致，避免出现 `score=4` 的口径歧义。
+- Commit: N/A（working tree）
+- Tests:
+  - `.venv/bin/python -m py_compile app/core/prompt/workflow_generator.py`
+- Next: 建议在下一轮评测中复跑同一 YAML 以验证新提示词下的分数分布稳定性（尤其关注是否仍出现超出 0-3 的打分返回）。

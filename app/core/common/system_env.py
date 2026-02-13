@@ -18,6 +18,10 @@ _env_vars: Dict[str, Tuple[Type, Any]] = {
     "LLM_NAME": (str, None),
     "LLM_ENDPOINT": (str, None),
     "LLM_APIKEY": (str, None),
+    "LLM_TIMEOUT_SECONDS": (float, 60.0),
+    "LLM_MAX_RETRIES": (int, 0),
+    "DATASET_SYNTHESIS_DEBUG": (bool, False),
+    "DATASET_SYNTHESIS_DEBUG_MAX_CHARS": (int, 2000),
     "TEMPERATURE": (float, 0.7),
     "MAX_TOKENS": (int, 1048576),
     "MAX_COMPLETION_TOKENS": (int, 65535),
@@ -58,6 +62,7 @@ _env_vars: Dict[str, Tuple[Type, Any]] = {
     "LANGUAGE": (str, "en-US"),
     "ENABLE_MEMFUSE": (bool, False),  # enable MemFuse as agent memory module
     "PRINT_MEMORY_LOG": (bool, False),
+    "PRINT_TOOLKIT_GRAPH": (bool, False),
     "MEMFUSE_BASE_URL": (str, "http://localhost:8765"),
     "MEMFUSE_API_KEY": (str, None),
     "MEMFUSE_TIMEOUT": (float, 30.0),

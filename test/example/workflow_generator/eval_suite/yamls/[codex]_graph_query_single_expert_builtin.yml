@@ -1,0 +1,102 @@
+app:
+  name: "[codex] Graph Query Single Expert"
+  desc: "Single-expert SDK config for graph entity query and multi-hop reasoning."
+  version: "0.0.1"
+
+plugin:
+  workflow_platform: "BUILTIN"
+
+reasoner:
+  type: "DUAL"
+
+tools:
+  - &schema_getter_tool
+    name: "SchemaGetter"
+    type: "LOCAL_TOOL"
+    module_path: "app.plugin.neo4j.resource.data_importation"
+
+  - &data_status_check_tool
+    name: "DataStatusCheck"
+    type: "LOCAL_TOOL"
+    module_path: "app.plugin.neo4j.resource.data_importation"
+
+  - &cypher_executor_tool
+    name: "CypherExecutor"
+    type: "LOCAL_TOOL"
+    module_path: "app.plugin.neo4j.resource.graph_query"
+
+actions:
+  - &schema_and_status_check_action
+    name: "schema_and_status_check"
+    desc: "Read schema and current data status to ground query planning."
+    tools:
+      - *schema_getter_tool
+      - *data_status_check_tool
+
+  - &cypher_query_execution_action
+    name: "cypher_query_execution"
+    desc: "Execute Cypher for entity lookup, relationship traversal, and multi-hop reasoning."
+    tools:
+      - *cypher_executor_tool
+
+  - &answer_assembly_action
+    name: "answer_assembly"
+    desc: "Assemble final answer with clear reasoning and returned evidence."
+    tools: []
+
+toolkit:
+  - [*schema_and_status_check_action, *cypher_query_execution_action, *answer_assembly_action]
+
+operators:
+  - &query_planning_operator
+    instruction: |
+      你的主要职责是解决关于图数据库的各种问题，包括实体查询、多跳推理等等。
+      先读取 schema 和数据状态，再识别用户问题中的实体、关系、过滤条件与查询目标。
+      必须优先覆盖以下三类查询：
+      1) Entity Attribute and Label Query（实体属性/标签查询）
+      2) Direct Relationship and Neighbor Query（直接关系/邻居查询）
+      3) Multi-Hop Relationship and Path Query（多跳关系/路径查询）
+      如果输入不完整，基于 schema 与数据状态做最小必要补全，不向用户反问。
+    output_schema: |
+      {
+        "task_type": "实体查询 | 关系查询 | 多跳推理 | 统计分析",
+        "resolved_entities": ["识别到的实体或标签"],
+        "resolved_relations": ["识别到的关系类型"],
+        "query_plan": "将如何构造 Cypher 的简要计划",
+        "assumptions": ["必要时写出补全假设"]
+      }
+    actions:
+      - *schema_and_status_check_action
+
+  - &query_execution_operator
+    instruction: |
+      基于查询计划构造并执行 Cypher。
+      对多跳推理场景，优先使用路径匹配（如可变长度路径）并给出可解释结果。
+      返回最终答案时，包含关键查询语句和结论，避免编造数据库中不存在的信息。
+      输出格式约束（必须遵守）：
+      - 若问题是属性值查询（例如 “What is ... ?”），answer 仅输出属性值本身，不加前后缀。
+      - 若问题是直接关系是否存在（例如 “Is there ... ?”），answer 仅输出 `Yes` 或 `No`。
+      - 若问题是路径可达性（例如 “Can ... through a path ... ?”）：
+        * 若可达：answer 输出 `Yes, via the path: <node1> -[REL]-> <node2> ...`
+        * 若不可达：answer 输出 `No`
+    output_schema: |
+      {
+        "cypher": "最终执行的 Cypher 语句",
+        "query_result": "工具返回的原始结果",
+        "answer": "面向用户的最终回答",
+        "reasoning": "从结果到结论的简要推理链"
+      }
+    actions:
+      - *cypher_query_execution_action
+      - *answer_assembly_action
+
+experts:
+  - profile:
+      name: "Main Expert"
+      desc: "图数据库专家：实体查询、多跳推理、结果解释。"
+    workflow:
+      - [*query_planning_operator, *query_execution_operator]
+
+knowledgebase: {}
+memory: {}
+env: {}

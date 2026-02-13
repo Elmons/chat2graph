@@ -97,6 +97,109 @@ class SamplingDatasetGenerator(DatasetGenerator):
         self.strategy = strategy
         self.nums_per_subgraph = nums_per_subgraph
 
+    def _debug_enabled(self) -> bool:
+        return bool(SystemEnv.DATASET_SYNTHESIS_DEBUG)
+
+    def _debug_limit(self) -> int:
+        limit = int(SystemEnv.DATASET_SYNTHESIS_DEBUG_MAX_CHARS)
+        return limit if limit > 0 else 2000
+
+    def _debug_print(self, message: str) -> None:
+        if self._debug_enabled():
+            print(f"[SamplingDatasetGenerator][debug] {message}")
+
+    def _truncate(self, text: str) -> str:
+        limit = self._debug_limit()
+        if len(text) <= limit:
+            return text
+        return text[:limit] + f"\n...<truncated {len(text) - limit} chars>"
+
+    @staticmethod
+    def _minify_json_text(raw: str) -> str:
+        """Return minified JSON text when possible; otherwise return original text."""
+        try:
+            parsed = json.loads(raw)
+            return json.dumps(parsed, ensure_ascii=False, separators=(",", ":"))
+        except Exception:
+            return raw
+
+    @staticmethod
+    def _compress_subgraph_for_prompt(subgraph_raw: str) -> str:
+        """Compress subgraph JSON only at formatting level.
+
+        Keep all original ids/properties unchanged. We only remove whitespace to
+        reduce prompt size.
+        """
+        return SamplingDatasetGenerator._minify_json_text(subgraph_raw)
+
+    @staticmethod
+    def _build_compact_task_level_info(task_types_info: GraphTaskTypesInfo) -> str:
+        """Build compact level/subtype description without verbose examples."""
+        parts: list[str] = []
+        for level_info in task_types_info.tasks_info:
+            parts.append(f"{level_info.level} {level_info.name}: {level_info.desc}")
+            for subtask in level_info.subtasks:
+                parts.append(f"- {subtask.name}: {subtask.desc}")
+        return "\n".join(parts)
+
+    @staticmethod
+    def _build_compact_task_stat_info(task_types_info: GraphTaskTypesInfo) -> str:
+        """Build compact statistics JSON (no indentation) for prompts."""
+        return json.dumps(task_types_info.count_info, ensure_ascii=False, separators=(",", ":"))
+
+    def _build_generate_pairs_prompt(
+        self,
+        *,
+        task_types_info: GraphTaskTypesInfo,
+        subgraph: str,
+        task_description: str,
+        nums: int,
+    ) -> str:
+        """Build a compact prompt for generate_pairs while preserving key semantics."""
+        subgraph_compact = self._compress_subgraph_for_prompt(subgraph)
+        level_info_compact = self._build_compact_task_level_info(task_types_info)
+        stat_info_compact = self._build_compact_task_stat_info(task_types_info)
+
+        prompt = generate_query_tv_template.format(
+            task_description=task_description,
+            subgraph=subgraph_compact,
+            num_pairs=nums,
+            task_level_info=level_info_compact,
+            task_statistic_info=stat_info_compact,
+        )
+
+        self._debug_print(
+            "generate_pairs prompt chars="
+            f"{len(prompt)} (subgraph={len(subgraph_compact)}, "
+            f"level_info={len(level_info_compact)}, stat_info={len(stat_info_compact)})"
+        )
+        return prompt
+
+    def _build_filter_prompt(
+        self,
+        *,
+        task_desc: str,
+        subgraph: str,
+        dataset: list[Row],
+    ) -> str:
+        """Build a compact filter prompt with JSON-serialized dataset/subgraph."""
+        subgraph_compact = self._compress_subgraph_for_prompt(subgraph)
+        dataset_compact = json.dumps(
+            [row.model_dump() for row in dataset],
+            ensure_ascii=False,
+            separators=(",", ":"),
+        )
+        prompt = filter_prompt_template.format(
+            task_desc=task_desc,
+            subgraph=subgraph_compact,
+            dataset=dataset_compact,
+        )
+        self._debug_print(
+            "filter prompt chars="
+            f"{len(prompt)} (subgraph={len(subgraph_compact)}, dataset={len(dataset_compact)})"
+        )
+        return prompt
+
     def extract_pairs(self, task_type: TASK_TYPES, text: str) -> list[Row]:
         """Extract TV pairs from an LLM response.
 
@@ -142,6 +245,18 @@ class SamplingDatasetGenerator(DatasetGenerator):
 
         valid_pairs: list[Row] = []
 
+        def _to_text(value) -> str:
+            if isinstance(value, str):
+                return value.strip()
+            if value is None:
+                return ""
+            if isinstance(value, (int, float, bool)):
+                return str(value)
+            try:
+                return json.dumps(value, ensure_ascii=False)
+            except Exception:
+                return str(value)
+
         def _maybe_add_obj(obj: Dict) -> None:
             valid = True
             for filed in required_fields:
@@ -152,8 +267,25 @@ class SamplingDatasetGenerator(DatasetGenerator):
                     break
             if not valid:
                 return
-            obj["task_type"] = task_type
-            valid_pairs.append(Row.model_validate(obj))
+            normalized = dict(obj)
+            normalized["task_type"] = task_type
+            normalized["level"] = _to_text(normalized.get("level")).upper()
+            normalized["task_subtype"] = _to_text(normalized.get("task_subtype"))
+            normalized["task"] = _to_text(normalized.get("task"))
+            normalized["verifier"] = _to_text(normalized.get("verifier"))
+
+            if not normalized["task_subtype"] or not normalized["task"] or not normalized["verifier"]:
+                return
+
+            try:
+                valid_pairs.append(Row.model_validate(normalized))
+            except Exception as e:
+                if self._debug_enabled():
+                    row_preview = self._truncate(json.dumps(normalized, ensure_ascii=False))
+                    self._debug_print(f"skip invalid row: {e}; row={row_preview}")
+                else:
+                    print(f"[SamplingDatasetGenerator][extract_pairs] skip invalid row: {e}")
+                return
 
         for block in _iter_json_blocks(text):
             block_pairs_before = len(valid_pairs)
@@ -220,13 +352,11 @@ class SamplingDatasetGenerator(DatasetGenerator):
         # prompt selection and construction
         if task_type != "query":
             raise ValueError(f"Unsupported task_type={task_type} in query-only mode")
-        prompt_template = generate_query_tv_template
-        prompt = prompt_template.format(
-            task_description=task_description,
+        prompt = self._build_generate_pairs_prompt(
+            task_types_info=task_types_info,
             subgraph=subgraph,
-            num_pairs=nums,
-            task_level_info=task_types_info.get_tasks_info(),
-            task_statistic_info=task_types_info.get_count_info(),
+            task_description=task_description,
+            nums=nums,
         )
 
         job_id = "generate_pairs_job"
@@ -239,9 +369,14 @@ class SamplingDatasetGenerator(DatasetGenerator):
 
         # generate response
         response = await self._llm.generate(sys_prompt="", messages=[message])
+        raw_payload = response.get_payload()
+        self._debug_print(
+            "generate_pairs raw response:\n" + self._truncate(raw_payload)
+        )
 
         # extract pairs from response
-        qas: list[Row] = self.extract_pairs(task_type, response.get_payload())
+        qas: list[Row] = self.extract_pairs(task_type, raw_payload)
+        self._debug_print(f"generate_pairs parsed rows={len(qas)}")
         return qas
 
     def get_task_type_from_strategy(self, strategy: GENERATOR_STRATEGY) -> TASK_TYPES:
@@ -267,11 +402,7 @@ class SamplingDatasetGenerator(DatasetGenerator):
         """Filter generated TV pairs using the LLM."""
 
         # prompt construction
-        prompt = filter_prompt_template.format(
-            task_desc=task_desc,
-            subgraph=subgraph,
-            dataset=dataset,
-        )
+        prompt = self._build_filter_prompt(task_desc=task_desc, subgraph=subgraph, dataset=dataset)
         job_id = "filter_job"
         message = ModelMessage(
             payload=prompt,
@@ -282,9 +413,12 @@ class SamplingDatasetGenerator(DatasetGenerator):
 
         # generate response
         response = await self._llm.generate(sys_prompt="", messages=[message])
+        raw_payload = response.get_payload()
+        self._debug_print("filter raw response:\n" + self._truncate(raw_payload))
 
         # extract pairs from response
-        qas: list[Row] = self.extract_pairs(task_type, response.get_payload())
+        qas: list[Row] = self.extract_pairs(task_type, raw_payload)
+        self._debug_print(f"filter parsed rows={len(qas)}")
         return qas
 
     async def generate(self, task_desc: str, dataset_name: str, size: int) -> WorkflowTrainDataset:

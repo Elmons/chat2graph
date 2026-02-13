@@ -24,6 +24,8 @@ class LiteLlmClient(ModelService):
         self._model_alias: str = SystemEnv.LLM_NAME
         self._api_base: str = SystemEnv.LLM_ENDPOINT
         self._api_key: str = SystemEnv.LLM_APIKEY
+        self._timeout_seconds: float = SystemEnv.LLM_TIMEOUT_SECONDS
+        self._max_retries: int = SystemEnv.LLM_MAX_RETRIES
         self._temperature: float = SystemEnv.TEMPERATURE
 
         self._max_tokens: int = SystemEnv.MAX_TOKENS
@@ -75,6 +77,8 @@ class LiteLlmClient(ModelService):
             max_tokens=self._max_tokens,
             max_completion_tokens=self._max_completion_tokens,
             stream=False,
+            timeout=self._timeout_seconds,
+            max_retries=self._max_retries,
         )
         if isinstance(model_response, CustomStreamWrapper) or isinstance(
             model_response.choices[0], StreamingChoices
