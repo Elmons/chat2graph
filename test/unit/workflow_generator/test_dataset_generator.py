@@ -103,15 +103,14 @@ async def test_identify_strategy_uses_llm_response(monkeypatch):
     generator, llm = _create_generator(monkeypatch, llm_payloads=["This is clearly a query task"])
     strategy = await generator.identify_strategy("desc")
     assert strategy == "query"
-    # Query-only mode: strategy identification should not call LLM.
-    assert llm.calls == 0
+    assert llm.calls == 1
 
 
 @pytest.mark.asyncio
 async def test_identify_strategy_returns_cached_strategy(monkeypatch):
     generator, llm = _create_generator(monkeypatch, strategy="non-query")
     result = await generator.identify_strategy("ignored")
-    assert result == "query"
+    assert result == "non-query"
     assert llm.calls == 0
 
 
@@ -145,7 +144,17 @@ def test_get_task_type_from_strategy_direct(monkeypatch):
 
 def test_get_task_type_from_strategy_mixed(monkeypatch):
     generator, _ = _create_generator(monkeypatch)
-    assert generator.get_task_type_from_strategy("mixed") == "query"
+    # monkeypatch.setattr("random.choice", lambda seq: seq[-1])
+    count = {"query": 0, "non-query": 0}
+    n = 100000
+    for _ in range(n):
+        random.seed(time.time()) 
+        t = generator.get_task_type_from_strategy("mixed")
+        count[t] += 1
+    
+    assert count["query"] + count["non-query"] == n
+    assert count["query"] > 0
+    assert count["non-query"] > 0
 
 @pytest.mark.asyncio
 async def test_filter_returns_filtered_rows(monkeypatch):
@@ -172,7 +181,7 @@ async def test_filter_returns_filtered_rows(monkeypatch):
         ),
         Row(
             level="L3",
-            task_type="query",
+            task_type="non-query",
             task_subtype="SubtypeC",
             task="Task",
             verifier="Verify",
@@ -282,3 +291,4 @@ def test_load_workflow_train_dataset_reads_ratio():
     assert dataset.task_desc == "desc"
     assert dataset.name == "test"
     assert all(isinstance(row, Row) for row in dataset.data)
+

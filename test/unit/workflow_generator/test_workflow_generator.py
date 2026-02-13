@@ -7,6 +7,7 @@ from unittest.mock import AsyncMock
 
 import pytest
 
+from app.core.model.message import TextMessage
 from app.core.workflow.dataset_synthesis.model import Row, WorkflowTrainDataset
 from app.core.workflow.dataset_synthesis.task_subtypes import GraphTaskTypesInfo
 from app.core.workflow.workflow_generator.mcts_workflow_generator.evaluator import (
@@ -29,9 +30,6 @@ from app.core.workflow.workflow_generator.mcts_workflow_generator.model import (
     ReflectResult,
     WorkflowLogFormat,
 )
-from app.core.workflow.workflow_generator.mcts_workflow_generator.runner import (
-    WorkflowRunRecord,
-)
 from app.core.workflow.workflow_generator.mcts_workflow_generator.selector import (
     MixedProbabilitySelector,
     Selector,
@@ -48,16 +46,20 @@ OPERATORS_YAML = """operators:
   - &operator_one
     instruction: Original instruction
     output_schema: Original schema
-    actions: []
+    actions:
+      - action_one
 """
 
 
 EXPERTS_YAML = """experts:
   - profile:
-      name: Main Expert
+      name: ExpertOne
       desc: Handles queries
+    reasoner:
+      actor_name: ExpertOne
+      thinker_name: ExpertOne
     workflow:
-      - - *operator_one
+      - - operator_one
 """
 
 
@@ -65,16 +67,20 @@ OPERATORS_UPDATE = """operators:
   - &operator_new
     instruction: Updated instruction
     output_schema: Updated schema
-    actions: []
+    actions:
+      - action_one
 """
 
 
 EXPERTS_UPDATE = """experts:
   - profile:
-      name: Main Expert
+      name: ExpertOne
       desc: Handles queries
+    reasoner:
+      actor_name: ExpertOne
+      thinker_name: ExpertOne
     workflow:
-      - - *operator_new
+      - - operator_new
 """
 
 
@@ -288,24 +294,30 @@ async def test_llm_evaluator_evaluate_workflow(monkeypatch, tmp_path):
         return_value=ReflectResult(failed_reason=["f"], optimize_suggestion=["s"])
     )
 
-    async def _fake_run_dataset(self, *, workflow_path, rows, graph_db_config=None, reset_state=True):
-        return [
-            WorkflowRunRecord(
-                task=row.task,
-                verifier=row.verifier,
-                model_output=f"output-{idx}",
-                error="",
-                latency_ms=10.0,
-                tokens=0,
-            )
-            for idx, row in enumerate(rows)
-        ]
+    class _StubJobWrapper:
+        def __init__(self, payload: str):
+            self._payload = payload
+
+        def wait(self):  # noqa: D401
+            return TextMessage(payload=self._payload)
+
+    class _StubAgent:
+        def __init__(self):
+            self.counter = 0
+
+        def session(self):  # noqa: D401
+            return self
+
+        def submit(self, message):  # noqa: D401
+            payload = f"output-{self.counter}"
+            self.counter += 1
+            return _StubJobWrapper(payload)
 
     evaluator._llm_scoring = mocked_scoring
     evaluator._reflect = mocked_reflect
     monkeypatch.setattr(
-        "app.core.workflow.workflow_generator.mcts_workflow_generator.evaluator.WorkflowRunner.run_dataset",
-        _fake_run_dataset,
+        "app.core.workflow.workflow_generator.mcts_workflow_generator.evaluator.load_agentic_service",
+        lambda optimized_path, round_num: _StubAgent(),
     )
     monkeypatch.setattr(
         "app.core.workflow.workflow_generator.mcts_workflow_generator.evaluator.load_execute_result",
@@ -332,7 +344,7 @@ async def test_llm_evaluator_evaluate_workflow(monkeypatch, tmp_path):
 @pytest.mark.asyncio
 async def test_mcts_generator_generate_rounds(monkeypatch, tmp_path):
     dataset = _make_dataset()
-    base_path = Path(__file__).resolve().parents[4]
+    base_path = Path(__file__).resolve().parents[3]
     init_template = (
         base_path
         / "app"
@@ -341,7 +353,7 @@ async def test_mcts_generator_generate_rounds(monkeypatch, tmp_path):
         / "workflow_generator"
         / "mcts_workflow_generator"
         / "init_template"
-        / "base_template.yml"
+        / "basic_template.yml"
     )
 
     stub_selector = _StubSelector()
@@ -378,7 +390,7 @@ async def test_mcts_generator_generate_rounds(monkeypatch, tmp_path):
 
 def test_mcts_generator_load_config_dict(monkeypatch, tmp_path):
     dataset = _make_dataset()
-    base_path = Path(__file__).resolve().parents[4]
+    base_path = Path(__file__).resolve().parents[3]
     init_template = (
         base_path
         / "app"
@@ -387,7 +399,7 @@ def test_mcts_generator_load_config_dict(monkeypatch, tmp_path):
         / "workflow_generator"
         / "mcts_workflow_generator"
         / "init_template"
-        / "base_template.yml"
+        / "basic_template.yml"
     )
 
     monkeypatch.setattr(
