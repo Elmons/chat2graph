@@ -30,6 +30,7 @@ DATASET_PATH = os.getenv("WF_DATASET_PATH", DEFAULT_DATASET_PATH)
 NO_IMPROVEMENT_PATIENCE = int(os.getenv("WF_NO_IMPROVEMENT_PATIENCE", "0"))
 RESUME = os.getenv("WF_RESUME", "0").lower() in {"1", "true", "yes"}
 RESUME_RUN_PATH = os.getenv("WF_RESUME_RUN_PATH")
+TRAIN_TEST_SPLIT_RATIO = float(os.getenv("WF_TRAIN_TEST_SPLIT_RATIO", "0.0"))
 
 
 async def test():
@@ -77,6 +78,7 @@ async def test():
         no_improvement_patience=NO_IMPROVEMENT_PATIENCE,
         resume=RESUME,
         resume_run_path=RESUME_RUN_PATH,
+        train_test_split_ratio=TRAIN_TEST_SPLIT_RATIO,
         optimize_grain=None,
         init_template_path="app/core/workflow/workflow_generator/mcts_workflow_generator/init_template/basic_template.yml"
         )

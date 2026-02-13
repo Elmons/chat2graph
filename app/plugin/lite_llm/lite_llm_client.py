@@ -88,6 +88,11 @@ class LiteLlmClient(ModelService):
                 "Please PR to add a streaming feature."
             )
 
+        self._record_token_usage(
+            job_id=messages[-1].get_job_id(),
+            model_response=model_response,
+        )
+
         # call functions based on the model output
         func_call_results: Optional[List[FunctionCallResult]] = None
         if tools:
@@ -118,6 +123,59 @@ class LiteLlmClient(ModelService):
         )
 
         return response
+
+    @staticmethod
+    def _extract_total_tokens(model_response: Any) -> int:
+        usage = getattr(model_response, "usage", None)
+        if usage is None and isinstance(model_response, dict):
+            usage = model_response.get("usage")
+        if usage is None:
+            return 0
+
+        total_tokens = None
+        if isinstance(usage, dict):
+            total_tokens = usage.get("total_tokens")
+            if total_tokens is None:
+                prompt_tokens = usage.get("prompt_tokens")
+                completion_tokens = usage.get("completion_tokens")
+                if isinstance(prompt_tokens, int | float) and isinstance(
+                    completion_tokens, int | float
+                ):
+                    total_tokens = prompt_tokens + completion_tokens
+        else:
+            total_tokens = getattr(usage, "total_tokens", None)
+            if total_tokens is None:
+                prompt_tokens = getattr(usage, "prompt_tokens", None)
+                completion_tokens = getattr(usage, "completion_tokens", None)
+                if isinstance(prompt_tokens, int | float) and isinstance(
+                    completion_tokens, int | float
+                ):
+                    total_tokens = prompt_tokens + completion_tokens
+
+        if not isinstance(total_tokens, int | float):
+            return 0
+        return max(0, int(total_tokens))
+
+    @staticmethod
+    def _accumulate_job_tokens(job_id: str, inc_tokens: int) -> None:
+        if not job_id or inc_tokens <= 0:
+            return
+        try:
+            from app.core.service.job_service import JobService
+
+            job_result = JobService.instance.get_job_result(job_id)
+            job_result.tokens = int(job_result.tokens) + int(inc_tokens)
+            JobService.instance.save_job_result(job_result)
+        except Exception:
+            # This path is best-effort: some model calls use synthetic job ids
+            # (e.g., evaluator prompts) that do not exist in JobService.
+            return
+
+    def _record_token_usage(self, *, job_id: str, model_response: Any) -> None:
+        total_tokens = self._extract_total_tokens(model_response)
+        if total_tokens <= 0:
+            return
+        self._accumulate_job_tokens(job_id=job_id, inc_tokens=total_tokens)
 
     def _prepare_model_request(
         self,

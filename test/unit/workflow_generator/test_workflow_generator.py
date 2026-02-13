@@ -409,7 +409,7 @@ async def test_mcts_generator_generate_rounds(monkeypatch, tmp_path):
     assert max_score == 2
     assert optimal_round == 2
     assert stub_selector.calls
-    assert stub_evaluator.calls == [1, 2]
+    assert stub_evaluator.calls == [2]
     assert 2 in generator.logs
 
 
@@ -456,10 +456,10 @@ async def test_mcts_generator_early_stop_on_no_improvement(monkeypatch, tmp_path
     max_score, optimal_round = await generator._generate_rounds()
 
     assert max_score == 1.0
-    assert optimal_round == 1
-    assert flat_evaluator.calls == [1, 2, 3]
-    assert 3 in generator.logs
-    assert 4 not in generator.logs
+    assert optimal_round == 2
+    assert flat_evaluator.calls == [2, 3, 4]
+    assert 4 in generator.logs
+    assert 5 not in generator.logs
 
 
 @pytest.mark.asyncio
@@ -501,7 +501,7 @@ async def test_mcts_generator_resume_from_existing_logs(monkeypatch, tmp_path):
         max_retries=1,
     )
     await first_generator._generate_rounds()
-    assert first_evaluator.calls == [1, 2]
+    assert first_evaluator.calls == [2]
 
     resumed_evaluator = _StubEvaluator()
     resumed_generator = MCTSWorkflowGenerator(
@@ -564,6 +564,51 @@ def test_mcts_generator_load_config_dict(monkeypatch, tmp_path):
 
     assert "app" in config
     assert "plugin" not in config
+
+
+def test_mcts_generator_split_dataset_default_uses_full_training(monkeypatch, tmp_path):
+    dataset = _make_dataset()
+    original_order = [row.task for row in dataset.data]
+    base_path = Path(__file__).resolve().parents[3]
+    init_template = (
+        base_path
+        / "app"
+        / "core"
+        / "workflow"
+        / "workflow_generator"
+        / "mcts_workflow_generator"
+        / "init_template"
+        / "basic_template.yml"
+    )
+
+    monkeypatch.setattr(
+        "app.core.workflow.workflow_generator.mcts_workflow_generator.generator.time.time",
+        lambda: 1_700_000_030,
+    )
+
+    generator = MCTSWorkflowGenerator(
+        db=None,
+        dataset=dataset,
+        selector=_StubSelector(),
+        expander=_StubExpander(),
+        evaluator=_StubEvaluator(),
+        optimize_grain=[AgenticConfigSection.OPERATORS, AgenticConfigSection.EXPERTS],
+        init_template_path=str(init_template),
+        max_rounds=1,
+        optimized_path=str(tmp_path),
+        top_k=1,
+        max_retries=1,
+    )
+
+    train_data, test_data = generator.split_dataset(
+        test_size=generator.train_test_split_ratio,
+        random_state=generator.split_random_state,
+    )
+
+    assert len(train_data) == len(dataset.data)
+    assert len(test_data) == 0
+    assert [row.task for row in train_data] == original_order
+    assert [row.task for row in dataset.data] == original_order
 
 
 def test_graph_task_types_info_snapshot():

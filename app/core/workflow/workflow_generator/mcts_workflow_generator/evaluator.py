@@ -87,8 +87,13 @@ class LLMEvaluator(Evaluator):
         if parent_round > 0:
             parent_dir = Path(optimized_path) / f"round{parent_round}"
             parent_results_file = parent_dir / "results.json"
-            parent_results = load_execute_result(parent_results_file)
-            parent_scores = {result.task: result.score for result in parent_results}
+            parent_scores: Dict[str, int] = {}
+            if parent_results_file.exists():
+                try:
+                    parent_results = load_execute_result(parent_results_file)
+                    parent_scores = {result.task: result.score for result in parent_results}
+                except Exception:
+                    parent_scores = {}
         else:
             parent_scores = {}
 

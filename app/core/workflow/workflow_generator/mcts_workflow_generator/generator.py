@@ -58,6 +58,8 @@ class MCTSWorkflowGenerator(WorkflowGenerator):
         no_improvement_patience: int = 0,
         resume: bool = False,
         resume_run_path: Optional[str] = None,
+        train_test_split_ratio: float = 0.0,
+        split_random_state: int = 42,
     ):
         """Configure generator dependencies and search hyper-parameters."""
         if optimize_grain is None:
@@ -71,6 +73,8 @@ class MCTSWorkflowGenerator(WorkflowGenerator):
         self.max_rounds = max_rounds
         self.resume = resume
         self.no_improvement_patience = max(0, int(no_improvement_patience))
+        self.train_test_split_ratio = max(0.0, min(1.0, float(train_test_split_ratio)))
+        self.split_random_state = int(split_random_state)
         # self.validate_rounds = validate_rounds
         if self.resume:
             self.optimized_path = str(resume_run_path or optimized_path)
@@ -138,7 +142,11 @@ class MCTSWorkflowGenerator(WorkflowGenerator):
         self, test_size: float = 0.3, random_state: int = 42
     ) -> Tuple[List[Row], List[Row]]:
         """Split the dataset into training and validation sets."""
-        data = self.dataset.data
+        data = list(self.dataset.data)
+        if test_size <= 0:
+            return data, []
+        if test_size >= 1:
+            return [], data
         random.seed(random_state)
         random.shuffle(data)
         split_index = int(test_size * len(data))
@@ -185,6 +193,8 @@ class MCTSWorkflowGenerator(WorkflowGenerator):
                 "optimal_round": self.optimal_round,
                 "no_improvement_patience": self.no_improvement_patience,
                 "resume": self.resume,
+                "train_test_split_ratio": self.train_test_split_ratio,
+                "split_random_state": self.split_random_state,
                 "workflow_constraints": {
                     "main_expert_name": self.workflow_constraints.main_expert_name,
                     "workflow_platform": workflow_platform,
@@ -300,7 +310,10 @@ class MCTSWorkflowGenerator(WorkflowGenerator):
 
     async def _generate_rounds(self) -> Tuple[float, int]:
         """Core loop that iteratively expands, evaluates, and scores workflows."""
-        train_data, _ = self.split_dataset()
+        train_data, _ = self.split_dataset(
+            test_size=self.train_test_split_ratio,
+            random_state=self.split_random_state,
+        )
         no_improvement_rounds = 0
 
         if self.resume:
@@ -320,13 +333,8 @@ class MCTSWorkflowGenerator(WorkflowGenerator):
         else:
             self.logger.info("[run]init_workflow...")
             self.init_workflow()
-            score, reflection = await self.evaluator.evaluate_workflow(
-                round_num=1,
-                parent_round=-1,
-                dataset=self.dataset.data,
-                modifications=[],
-                optimized_path=self.optimized_path,
-            )
+            score = 0.0
+            reflection = "Round1 baseline initialized; evaluation skipped."
             self.logs[1] = WorkflowLogFormat(
                 round_number=1,
                 parent_round=None,
