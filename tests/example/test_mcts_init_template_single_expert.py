@@ -16,7 +16,7 @@ def test_mcts_init_template_has_single_entry_expert_and_no_mcp_tools() -> None:
     assert config.experts[0].profile.name == "Main Expert"
 
     toolset_path = Path(
-        "app/core/workflow/workflow_generator/mcts_workflow_generator/toolsets/default.yml"
+        "app/core/sdk/toolsets/graph_only.yml"
     )
     raw = yaml.safe_load(toolset_path.read_text(encoding="utf-8"))
     tools = raw.get("tools", [])

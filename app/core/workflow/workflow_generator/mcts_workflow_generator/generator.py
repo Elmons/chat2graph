@@ -1,14 +1,20 @@
-import json
 from pathlib import Path
 import random
 import time
 from typing import Dict, List, Optional, Tuple
 
+from app.core.common.logger import Chat2GraphLogger
 from app.core.service.graph_db_service import GraphDb
 from app.core.workflow.dataset_synthesis.model import Row, WorkflowTrainDataset
 from app.core.workflow.workflow_generator.generator import (
     WorkflowGenerationResult,
     WorkflowGenerator,
+)
+from app.core.workflow.workflow_generator.mcts_workflow_generator.artifact_writer import (
+    MCTSArtifactWriter,
+)
+from app.core.workflow.workflow_generator.mcts_workflow_generator.constraints import (
+    WorkflowConstraints,
 )
 from app.core.workflow.workflow_generator.mcts_workflow_generator.evaluator import Evaluator
 from app.core.workflow.workflow_generator.mcts_workflow_generator.expander import Expander
@@ -20,7 +26,7 @@ from app.core.workflow.workflow_generator.mcts_workflow_generator.selector impor
 from app.core.workflow.workflow_generator.mcts_workflow_generator.utils import load_config_dict
 from app.core.workflow.workflow_generator.mcts_workflow_generator.validator import (
     infer_single_expert_name,
-    validate_workflow_yaml,
+    validate_candidate_config,
 )
 
 
@@ -37,12 +43,13 @@ class MCTSWorkflowGenerator(WorkflowGenerator):
         optimize_grain: List[AgenticConfigSection],
         main_expert_name: Optional[str] = None,
         toolset_path: str = (
-            "app/core/workflow/workflow_generator/mcts_workflow_generator/toolsets/default.yml"
+            "app/core/sdk/toolsets/graph_only.yml"
         ),
         init_template_path: str = (
             "app/core/workflow/workflow_generator/mcts_workflow_generator/"
             "init_template/base_template.yml"
         ),
+        workflow_constraints: Optional[WorkflowConstraints] = None,
         max_rounds: int = 30,
         optimized_path: str = "workflow_space",
         top_k: int = 5,
@@ -60,6 +67,7 @@ class MCTSWorkflowGenerator(WorkflowGenerator):
         self.max_rounds = max_rounds
         # self.validate_rounds = validate_rounds
         self.optimized_path = f"{optimized_path}/{self.dataset.name}_{str(int(time.time()))[-4:-1]}"
+        self.artifact_writer = MCTSArtifactWriter(self.optimized_path)
         self.top_k = top_k
         self.max_retries = max_retries
         self.logs: dict[int, WorkflowLogFormat] = {}
@@ -70,57 +78,22 @@ class MCTSWorkflowGenerator(WorkflowGenerator):
         self.init_config_dict: Dict[str, str] = {}
         self.max_score: float = -1
         self.optimal_round = 0
+        self.workflow_constraints = workflow_constraints or WorkflowConstraints(
+            main_expert_name=main_expert_name or "Main Expert",
+            require_agentic_parse=True,
+            require_agentic_service_dry_run=True,
+        )
+        self.logger = Chat2GraphLogger.get_logger(__name__)
 
     def init_workflow(self):
         """Seed the search space with a baseline workflow copied from a template file."""
-
-        # 创建保存路径
-        save_path = Path(self.optimized_path) / "round1"
-        save_path.mkdir(parents=True, exist_ok=True)
-
-        # 写入 workflow.yml 文件
-        workflow_file = save_path / "workflow.yml"
-        base_dict = load_config_dict(self.init_template_path, skip_section=[])
-        toolset_dict = load_config_dict(self.toolset_path, skip_section=[])
-
-        def _req(section: AgenticConfigSection, src: Dict[str, str], name: str) -> str:
-            key = str(section.value)
-            val = src.get(key)
-            if not val:
-                raise ValueError(f"Missing `{key}` section in {name}")
-            return val
-
-        with open(workflow_file, "w", encoding="utf-8") as f:
-            # base sections
-            for section in [
-                AgenticConfigSection.APP,
-                AgenticConfigSection.PLUGIN,
-                AgenticConfigSection.REASONER,
-            ]:
-                f.write(_req(section, base_dict, "base_template"))
-                f.write("\n\n")
-
-            # toolset sections (U)
-            for section in [
-                AgenticConfigSection.TOOLS,
-                AgenticConfigSection.ACTIONS,
-                AgenticConfigSection.TOOLKIT,
-            ]:
-                f.write(_req(section, toolset_dict, "toolset"))
-                f.write("\n\n")
-
-            # base runtime sections
-            for section in [
-                AgenticConfigSection.OPERATORS,
-                AgenticConfigSection.EXPERTS,
-                AgenticConfigSection.KNOWLEDGEBASE,
-                AgenticConfigSection.MEMORY,
-                AgenticConfigSection.ENV,
-            ]:
-                f.write(_req(section, base_dict, "base_template"))
-                f.write("\n\n")
-
-        print(f"Initialized default workflow at: {workflow_file}")
+        workflow_file = self.artifact_writer.write_round_workflow(
+            round_num=1,
+            base_template_path=self.init_template_path,
+            toolset_path=self.toolset_path,
+            candidate_sections={},
+        )
+        self.logger.info("Initialized default workflow at: %s", workflow_file)
         if not self.main_expert_name:
             inferred = infer_single_expert_name(workflow_file)
             if not inferred:
@@ -129,19 +102,20 @@ class MCTSWorkflowGenerator(WorkflowGenerator):
                     "please pass main_expert_name explicitly."
                 )
             self.main_expert_name = inferred
-
-        validation = validate_workflow_yaml(workflow_file, main_expert_name=self.main_expert_name)
+        self.workflow_constraints.main_expert_name = self.main_expert_name
+        validation = validate_candidate_config(
+            workflow_file,
+            constraints=self.workflow_constraints,
+        )
         if not validation.ok:
-            raise ValueError(
-                f"init_template workflow.yml failed validation: {validation.errors}"
-            )
+            raise ValueError(f"init_template workflow.yml failed validation: {validation.errors}")
 
         config_dict = self.load_config_dict(round_num=1, skip_section=None)
         for section in AgenticConfigSection:
             section_name = str(section.value)
             section_context = config_dict.get(section_name)
             if section_context is None:
-                print(
+                self.logger.warning(
                     "[MCTSWorkflowGenerator][init_workflow] Can't find "
                     f"{section_name} in {workflow_file}"
                 )
@@ -184,49 +158,32 @@ class MCTSWorkflowGenerator(WorkflowGenerator):
 
     def log_save(self):
         """Persist the current optimization logs and summary metadata to disk."""
-        save_dir = Path(self.optimized_path) / "log"
-        save_dir.mkdir(parents=True, exist_ok=True)
-        log_file = save_dir / "log.json"
-        edges_file = save_dir / "edges.json"
-        config_file = save_dir / "config.json"
-        with open(log_file, "w", encoding="utf-8") as f:
-            logs = [v.model_dump(mode="json") for k, v in self.logs.items()]
-            json.dump(
-                logs,
-                f,
-                ensure_ascii=False,
-                indent=2,
-            )
-
-        edges = []
-        for log in self.logs.values():
-            if log.parent_round is None:
-                continue
-            edges.append(
-                {
-                    "parent_round": log.parent_round,
-                    "child_round": log.round_number,
-                }
-            )
-        with open(edges_file, "w", encoding="utf-8") as f:
-            json.dump(edges, f, ensure_ascii=False, indent=2)
-
-        with open(config_file, "w", encoding="utf-8") as f:
-            config = [
-                {
-                    "max_rounds": self.max_rounds,
-                    "top_k": self.top_k,
-                    "init_template_path": self.init_template_path,
-                    "max_score": self.max_score,
-                    "optimal_round": self.optimal_round,
-                }
-            ]
-            json.dump(
-                config,
-                f,
-                ensure_ascii=False,
-                indent=2,
-            )
+        workflow_platform = (
+            self.workflow_constraints.workflow_platform.value
+            if self.workflow_constraints.workflow_platform
+            else None
+        )
+        return self.artifact_writer.write_logs(
+            logs=self.logs,
+            config={
+                "max_rounds": self.max_rounds,
+                "top_k": self.top_k,
+                "init_template_path": self.init_template_path,
+                "toolset_path": self.toolset_path,
+                "max_score": self.max_score,
+                "optimal_round": self.optimal_round,
+                "workflow_constraints": {
+                    "main_expert_name": self.workflow_constraints.main_expert_name,
+                    "workflow_platform": workflow_platform,
+                    "require_single_expert": self.workflow_constraints.require_single_expert,
+                    "require_single_tail": self.workflow_constraints.require_single_tail,
+                    "require_agentic_parse": self.workflow_constraints.require_agentic_parse,
+                    "require_agentic_service_dry_run": (
+                        self.workflow_constraints.require_agentic_service_dry_run
+                    ),
+                },
+            },
+        )
 
     async def generate(self) -> WorkflowGenerationResult:
         """Run the optimization loop and return the best workflow discovered."""
@@ -247,7 +204,7 @@ class MCTSWorkflowGenerator(WorkflowGenerator):
         """Core loop that iteratively expands, evaluates, and scores workflows."""
         train_data, _ = self.split_dataset()
 
-        print("[run]init_workflow...")
+        self.logger.info("[run]init_workflow...")
         self.init_workflow()
         score, reflection = await self.evaluator.evaluate_workflow(
             round_num=1,
@@ -264,12 +221,15 @@ class MCTSWorkflowGenerator(WorkflowGenerator):
             modifications=[],
             feedbacks=[],
         )
+        self.max_score = score
+        self.optimal_round = 1
         self.log_save()
         for round_num in range(2, self.max_rounds + 1):
-            print(f"[run]optimize, round={round_num}...")
+            self.logger.info("[run]optimize, round=%s...", round_num)
             # Select a workflow
             select_retry_times = 0
             round_context = None
+            select_round = None
             while select_retry_times < self.max_retries:
                 select_retry_times += 1
                 select_round = self.selector.select(top_k=self.top_k, logs=self.logs)
@@ -278,7 +238,9 @@ class MCTSWorkflowGenerator(WorkflowGenerator):
                     break
             
             if round_context is None or select_round is None:
-                print(f"[run]select workflow failed after {self.max_retries} retries")
+                self.logger.warning(
+                    "[run]select workflow failed after %s retries", self.max_retries
+                )
                 continue
             # Load Workflow
             current_config = self.load_config_dict(select_round.round_number, skip_section=[])
@@ -291,41 +253,42 @@ class MCTSWorkflowGenerator(WorkflowGenerator):
             )
 
             if optimize_resp is None:
-                print(f"[run]new flow generate failed, round={round_num}")
+                self.logger.warning("[run]new flow generate failed, round=%s", round_num)
                 continue
 
             # Save workflow
-            new_flow_dir = Path(self.optimized_path + f"/round{round_num}")
-            new_flow_dir.mkdir(parents=True, exist_ok=True)
-            new_flow_path = new_flow_dir / "workflow.yml"
+            candidate_sections = dict(optimize_resp.new_configs)
+            for section in self.optimize_grain:
+                section_name = str(section.value)
+                if section_name in candidate_sections:
+                    continue
+                current_section = current_config.get(section_name)
+                if current_section:
+                    candidate_sections[section_name] = current_section
+
             try:
-                with open(new_flow_path, "w", encoding="utf-8") as f:
-                    for section in AgenticConfigSection:
-                        if section not in self.optimize_grain:
-                            section_name = str(section.value)
-                            section_init_context = self.init_config_dict.get(section_name, None)
-                            if section_init_context is None:
-                                print(
-                                    "[MCTSWorkflowGenerator][run] Can't find "
-                                    f"{section_name} in init_config_dict"
-                                )
-                                continue
-                            f.write(section_init_context)
-                            f.write("\n\n")
-                    for _, section_context in optimize_resp.new_configs.items():
-                        f.write(section_context)
-                        f.write("\n\n")
-            except Exception:
-                print("[run]exception while saving workflow")
+                new_flow_path = self.artifact_writer.write_round_workflow(
+                    round_num=round_num,
+                    base_template_path=self.init_template_path,
+                    toolset_path=self.toolset_path,
+                    candidate_sections=candidate_sections,
+                )
+            except Exception as e:
+                self.logger.warning(
+                    "[run]exception while saving workflow, round=%s, reason=%s", round_num, e
+                )
                 continue
 
-            validation = validate_workflow_yaml(
-                new_flow_path, main_expert_name=self.main_expert_name
+            validation = validate_candidate_config(
+                new_flow_path,
+                constraints=self.workflow_constraints,
             )
             if not validation.ok:
-                print(
+                self.logger.warning(
                     "[run]candidate workflow.yml failed validation, "
-                    f"round={round_num}, errors={validation.errors}"
+                    "round=%s, errors=%s",
+                    round_num,
+                    validation.errors,
                 )
                 continue
 

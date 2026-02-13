@@ -168,3 +168,10 @@
 - Docs: `extra_doc/data_synthesis_and_graph_task_taxonomy_research.md`
 - Tests: N/A（文档改动）
 - Next: 按文档建议推进 RowV2（可执行 verifier + expected）与 subtype id/required_actions 绑定（独立 commit）。
+
+- What: 推进 Milestone E/F/G/H/I 未完成项：新增统一 `WorkflowConstraints` + `validate_candidate_config`（结构校验 + AgenticConfig.parse + 可选 AgenticService.load dry-run）；抽出 `WorkflowRunner`（执行与评分解耦）与 `MCTSArtifactWriter`（round/log 落盘统一）；新增 `config_assembler` 实现 base+toolset+candidate 动态装配，并将 MCTS 默认 toolset 切到 `app/core/sdk/toolsets/graph_only.yml`；在 expander prompt 注入 action whitelist 并校验 operator.actions 只允许白名单；扩展离线评测 `eval_yaml_pipeline` 支持显式 `graph_db_config`、`run_meta.json`、`success_rate/avg_latency_ms/total_tokens/error_breakdown` 指标与多进程隔离并发评测。
+- Commit: N/A（working tree）
+- Tests (mock-only):
+  - `.venv/bin/pytest -q tests/example/test_mcts_config_assembler.py tests/example/test_mcts_candidate_validation.py tests/example/test_mcts_expander_action_constraints.py tests/example/test_mcts_workflow_validator.py tests/example/test_mcts_init_template_single_expert.py tests/example/test_mcts_logging_edges.py tests/example/test_eval_yaml_pipeline.py`
+  - `.venv/bin/pytest -m "not real_llm"`
+- Next: （按需）补 `eval_yaml_pipeline` 的 `real_llm` smoke（仍保持 opt-in），并在实验脚本中接入 `parallelism/process_isolation` 与 `graph_db_config` 参数。

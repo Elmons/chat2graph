@@ -1,25 +1,22 @@
 from abc import abstractmethod
 import json
 from pathlib import Path
-import sys
 from typing import Dict, List, Literal, Tuple
 
-from app.core.common.runtime_reset import reset_runtime_state
 from app.core.common.system_env import SystemEnv
 from app.core.common.type import MessageSourceType
-from app.core.model.message import HybridMessage, ModelMessage, TextMessage
+from app.core.model.message import ModelMessage
 from app.core.prompt.workflow_generator import eval_prompt_template, reflect_prompt_template
 from app.core.reasoner.model_service_factory import ModelService, ModelServiceFactory
-from app.core.sdk.wrapper.job_wrapper import JobWrapper
 from app.core.workflow.dataset_synthesis.model import Row
 from app.core.workflow.workflow_generator.mcts_workflow_generator.model import (
     ExecuteResult,
     ReflectResult,
 )
+from app.core.workflow.workflow_generator.mcts_workflow_generator.runner import WorkflowRunner
 from app.core.workflow.workflow_generator.mcts_workflow_generator.utils import (
     JsonValue,
     generate_json,
-    load_agentic_service,
     load_execute_result,
 )
 
@@ -39,17 +36,6 @@ class Evaluator:
         """Evaluate the workflow and return its score together with reflection text."""
 
     
-class Blackhole:
-    """Utility stream that discards everything written to it."""
-    def write(self, *args, **kwargs):
-        """Discard write calls coming from redirected stdout."""
-        return 0
-        
-    
-    def flush(self):
-        """Accept flush calls expected by some writers."""
-        return None
-
 class LLMEvaluator(Evaluator):
     """Leverage LLMs to score workflow executions and reflect on outcomes."""
 
@@ -107,15 +93,16 @@ class LLMEvaluator(Evaluator):
         total_score = 0.0
         results: List[ExecuteResult] = []
 
-        step_size = 5
-        # Reset runtime singletons/toolkit caches for reproducible evaluation runs.
-        reset_runtime_state()
-
-        # Load the agentic service once for the whole dataset evaluation.
         try:
-            agent_sys = load_agentic_service(
-                optimized_path=optimized_path,
-                round_num=round_num,
+            runner = WorkflowRunner(
+                main_expert_name=self.main_expert_name,
+                batch_size=5,
+                suppress_stdout=True,
+            )
+            run_records = await runner.run_dataset(
+                workflow_path=Path(optimized_path) / f"round{round_num}" / "workflow.yml",
+                rows=dataset,
+                reset_state=True,
             )
         except Exception as e:
             for data in dataset:
@@ -128,96 +115,64 @@ class LLMEvaluator(Evaluator):
                         ori_score=parent_score,
                         score=-1,
                         error=(
-                            "load_agentic_service failed, the configuration file has errors, "
+                            "workflow execution bootstrap failed, "
                             f"reason={e}"
                         ),
                         succeed="no",
+                        error_type="bootstrap_error",
                     )
                 )
             avg_score = -1.0
         else:
-            entry_expert_name = agent_sys.entry_expert_name()
-            if not entry_expert_name:
-                raise ValueError(
-                    "LLMEvaluator requires single-expert mode (or explicit assigned_expert_name) "
-                    "to avoid Leader decomposition."
-                )
-            if entry_expert_name != self.main_expert_name:
-                raise ValueError(
-                    "LLMEvaluator main_expert_name mismatch: "
-                    f"expected {self.main_expert_name!r}, got {entry_expert_name!r}"
-                )
-
-            original_stdout = sys.stdout
-            try:
-                sys.stdout = Blackhole()
-                # Process dataset in batches
-                for start in range(0, len(dataset), step_size):
-                    batch = dataset[start : start + step_size]
-
-                    jobs: List[tuple[Row, JobWrapper]] = []
-                    # Submit jobs for the current batch
-                    for data in batch:
-                        message = TextMessage(
-                            payload=data.task, assigned_expert_name=entry_expert_name
+            for record in run_records:
+                parent_score = parent_scores.get(record.task, -1)
+                try:
+                    if record.error:
+                        raise RuntimeError(record.error)
+                    score = await self._llm_scoring(
+                        question=record.task,
+                        model_output=record.model_output,
+                        expected_answer=record.verifier,
+                    )
+                    total_score += score
+                    succeed: Literal["yes", "no", "unknown"]
+                    if parent_score < 0:
+                        succeed = "unknown"
+                    elif score > parent_score:
+                        succeed = "yes"
+                    else:
+                        succeed = "no"
+                    results.append(
+                        ExecuteResult(
+                            task=record.task,
+                            verifier=record.verifier,
+                            model_output=record.model_output,
+                            ori_score=parent_score,
+                            score=score,
+                            error="",
+                            succeed=succeed,
+                            latency_ms=record.latency_ms,
+                            token_usage={"total": record.tokens},
+                            error_type=None,
                         )
-                        jobs.append((data, agent_sys.session().submit(message)))
+                    )
+                except Exception as e:
+                    results.append(
+                        ExecuteResult(
+                            task=record.task,
+                            verifier=record.verifier,
+                            model_output=record.model_output,
+                            ori_score=parent_score,
+                            score=0,
+                            error=f"{e}",
+                            succeed="no",
+                            latency_ms=record.latency_ms,
+                            token_usage={"total": record.tokens},
+                            error_type=type(e).__name__,
+                        )
+                    )
 
-                    # Collect results and score them
-                    for data, jobwrapper in jobs:
-                        parent_score = parent_scores.get(data.task, -1)
-                        result = None
-                        try:
-                            model_message = jobwrapper.wait()
-                            if isinstance(model_message, TextMessage):
-                                result = model_message.get_payload()
-                            elif isinstance(model_message, HybridMessage):
-                                result = model_message.get_instruction_message().get_payload()
-
-                            # Use the LLM to score the result
-                            score = await self._llm_scoring(
-                                question=data.task,
-                                model_output=str(result),
-                                expected_answer=data.verifier,
-                            )
-
-                            # store the score and result
-                            total_score += score
-                            succeed: Literal["yes", "no", "unknown"]
-                            if parent_score < 0:
-                                succeed = "unknown"
-                            elif score > parent_score:
-                                succeed = "yes"
-                            else:
-                                succeed = "no"
-
-                            results.append(
-                                ExecuteResult(
-                                    task=data.task,
-                                    verifier=data.verifier,
-                                    model_output=str(result),
-                                    ori_score=parent_score,
-                                    score=score,
-                                    error="",
-                                    succeed=succeed,
-                                )
-                            )
-                        except Exception as e:
-                            results.append(
-                                ExecuteResult(
-                                    task=data.task,
-                                    verifier=data.verifier,
-                                    model_output=str(result),
-                                    ori_score=parent_score,
-                                    score=0,
-                                    error=f"{e}",
-                                    succeed="no",
-                                )
-                            )
-            finally:
-                sys.stdout = original_stdout
-
-            avg_score = total_score / len(dataset)
+            avg_score = total_score / max(len(dataset), 1)
 
         # Save results to disk
         with open(results_file, "w", encoding="utf-8") as f:

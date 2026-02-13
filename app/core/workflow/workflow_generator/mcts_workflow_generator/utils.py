@@ -11,6 +11,9 @@ from app.core.common.util import parse_jsons
 from app.core.model.message import ModelMessage
 from app.core.reasoner.model_service_factory import ModelService
 from app.core.sdk.agentic_service import AgenticService
+from app.core.workflow.workflow_generator.mcts_workflow_generator.config_assembler import (
+    assemble_workflow_file_from_candidate_yaml,
+)
 from app.core.workflow.workflow_generator.mcts_workflow_generator.model import (
     AgenticConfigSection,
     ExecuteResult,
@@ -19,9 +22,25 @@ from app.core.workflow.workflow_generator.mcts_workflow_generator.model import (
 logger = Chat2GraphLogger.get_logger(__name__)
 
 
-def load_agentic_service(optimized_path: str, round_num: int) -> AgenticService:
+def load_agentic_service(
+    optimized_path: str,
+    round_num: int,
+    *,
+    base_template_path: str | None = None,
+    toolset_path: str | None = None,
+) -> AgenticService:
     """Load the agentic service definition for a given optimisation round."""
-    workflow_path = optimized_path + f"/round{round_num}" + "/workflow.yml"
+    round_dir = Path(optimized_path) / f"round{round_num}"
+    workflow_path = round_dir / "workflow.yml"
+    if base_template_path and toolset_path:
+        assembled_path = round_dir / "runtime_workflow.yml"
+        assemble_workflow_file_from_candidate_yaml(
+            base_template_path=base_template_path,
+            toolset_path=toolset_path,
+            candidate_yaml_path=workflow_path,
+            output_path=assembled_path,
+        )
+        workflow_path = assembled_path
     mas = AgenticService.load(workflow_path)
     return mas
 

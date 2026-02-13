@@ -68,6 +68,9 @@ class ExecuteResult(BaseModel):
     score: float
     error: str
     succeed: Literal["yes", "no", "unknown"]
+    latency_ms: Optional[float] = None
+    token_usage: Optional[Dict[str, int]] = None
+    error_type: Optional[str] = None
 
 
 class ReflectResult(BaseModel):

@@ -7,7 +7,6 @@ from unittest.mock import AsyncMock
 
 import pytest
 
-from app.core.model.message import TextMessage
 from app.core.workflow.dataset_synthesis.model import Row, WorkflowTrainDataset
 from app.core.workflow.dataset_synthesis.task_subtypes import GraphTaskTypesInfo
 from app.core.workflow.workflow_generator.mcts_workflow_generator.evaluator import (
@@ -29,6 +28,9 @@ from app.core.workflow.workflow_generator.mcts_workflow_generator.model import (
     OptimizeResp,
     ReflectResult,
     WorkflowLogFormat,
+)
+from app.core.workflow.workflow_generator.mcts_workflow_generator.runner import (
+    WorkflowRunRecord,
 )
 from app.core.workflow.workflow_generator.mcts_workflow_generator.selector import (
     MixedProbabilitySelector,
@@ -286,33 +288,24 @@ async def test_llm_evaluator_evaluate_workflow(monkeypatch, tmp_path):
         return_value=ReflectResult(failed_reason=["f"], optimize_suggestion=["s"])
     )
 
-    class _StubJobWrapper:
-        def __init__(self, payload: str):
-            self._payload = payload
-
-        def wait(self):  # noqa: D401
-            return TextMessage(payload=self._payload)
-
-    class _StubAgent:
-        def __init__(self):
-            self.counter = 0
-
-        def entry_expert_name(self):  # noqa: D401
-            return "Main Expert"
-
-        def session(self):  # noqa: D401
-            return self
-
-        def submit(self, message):  # noqa: D401
-            payload = f"output-{self.counter}"
-            self.counter += 1
-            return _StubJobWrapper(payload)
+    async def _fake_run_dataset(self, *, workflow_path, rows, graph_db_config=None, reset_state=True):
+        return [
+            WorkflowRunRecord(
+                task=row.task,
+                verifier=row.verifier,
+                model_output=f"output-{idx}",
+                error="",
+                latency_ms=10.0,
+                tokens=0,
+            )
+            for idx, row in enumerate(rows)
+        ]
 
     evaluator._llm_scoring = mocked_scoring
     evaluator._reflect = mocked_reflect
     monkeypatch.setattr(
-        "app.core.workflow.workflow_generator.mcts_workflow_generator.evaluator.load_agentic_service",
-        lambda optimized_path, round_num: _StubAgent(),
+        "app.core.workflow.workflow_generator.mcts_workflow_generator.evaluator.WorkflowRunner.run_dataset",
+        _fake_run_dataset,
     )
     monkeypatch.setattr(
         "app.core.workflow.workflow_generator.mcts_workflow_generator.evaluator.load_execute_result",

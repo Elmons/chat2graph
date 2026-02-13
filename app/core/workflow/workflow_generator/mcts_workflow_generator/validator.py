@@ -2,15 +2,30 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 from pathlib import Path
-from typing import Any, Dict, Iterable, List, Tuple
+from typing import Any, Dict, Iterable, List, Optional, Tuple
 
 import yaml
+
+from app.core.common.logger import Chat2GraphLogger
+from app.core.common.type import WorkflowPlatformType
+from app.core.workflow.workflow_generator.mcts_workflow_generator.constraints import (
+    WorkflowConstraints,
+)
+
+logger = Chat2GraphLogger.get_logger(__name__)
 
 
 @dataclass(frozen=True)
 class WorkflowValidationResult:
     ok: bool
     errors: List[str]
+
+
+@dataclass(frozen=True)
+class CandidateValidationResult:
+    ok: bool
+    errors: List[str]
+    stage_errors: Dict[str, List[str]]
 
 
 def _as_str(value: Any) -> str:
@@ -49,6 +64,9 @@ def validate_workflow_yaml(
     yaml_path: str | Path,
     *,
     main_expert_name: str = "Main Expert",
+    expected_workflow_platform: Optional[WorkflowPlatformType] = None,
+    require_single_expert: bool = True,
+    require_single_tail: bool = True,
 ) -> WorkflowValidationResult:
     """Validate workflow YAML for single-expert execution and DAG constraints.
 
@@ -68,12 +86,26 @@ def validate_workflow_yaml(
 
     errors: List[str] = []
 
+    if expected_workflow_platform is not None:
+        plugin = raw.get("plugin", {})
+        workflow_platform = None
+        if isinstance(plugin, dict):
+            workflow_platform = plugin.get("workflow_platform")
+        if workflow_platform != expected_workflow_platform.value:
+            errors.append(
+                "workflow platform mismatch: "
+                f"expected {expected_workflow_platform.value!r}, got {workflow_platform!r}"
+            )
+
     experts = raw.get("experts", [])
     if not isinstance(experts, list):
         errors.append("`experts` must be a list")
         return WorkflowValidationResult(ok=False, errors=errors)
-    if len(experts) != 1:
+    if require_single_expert and len(experts) != 1:
         errors.append(f"single-expert mode requires exactly 1 expert, got {len(experts)}")
+        return WorkflowValidationResult(ok=False, errors=errors)
+    if len(experts) == 0:
+        errors.append("`experts` must be non-empty")
         return WorkflowValidationResult(ok=False, errors=errors)
     expert0 = experts[0]
     if not isinstance(expert0, dict):
@@ -83,7 +115,7 @@ def validate_workflow_yaml(
     if not isinstance(profile, dict):
         errors.append("expert.profile must be a mapping")
         return WorkflowValidationResult(ok=False, errors=errors)
-    if profile.get("name") != main_expert_name:
+    if require_single_expert and profile.get("name") != main_expert_name:
         errors.append(
             f"single-expert mode requires expert profile.name == {main_expert_name!r}, "
             f"got {profile.get('name')!r}"
@@ -204,10 +236,65 @@ def validate_workflow_yaml(
         errors.append("workflow must be a DAG (cycle detected)")
 
     tails = [n for n in nodes if out_deg.get(n, 0) == 0]
-    if len(tails) != 1:
+    if require_single_tail and len(tails) != 1:
         errors.append(f"workflow must have exactly 1 tail operator, got {len(tails)}")
 
     return WorkflowValidationResult(ok=len(errors) == 0, errors=errors)
+
+
+def validate_candidate_config(
+    yaml_path: str | Path,
+    *,
+    constraints: Optional[WorkflowConstraints] = None,
+) -> CandidateValidationResult:
+    """Validate a candidate workflow with structural and optional dry-run checks."""
+    constraints = constraints or WorkflowConstraints()
+    stage_errors: Dict[str, List[str]] = {}
+
+    structural = validate_workflow_yaml(
+        yaml_path=yaml_path,
+        main_expert_name=constraints.main_expert_name,
+        expected_workflow_platform=constraints.workflow_platform,
+        require_single_expert=constraints.require_single_expert,
+        require_single_tail=constraints.require_single_tail,
+    )
+    if not structural.ok:
+        stage_errors["structure"] = structural.errors
+
+    if constraints.require_agentic_parse and not stage_errors.get("structure"):
+        try:
+            from app.core.model.agentic_config import AgenticConfig
+
+            AgenticConfig.from_yaml(yaml_path)
+        except Exception as e:
+            stage_errors["agentic_parse"] = [f"AgenticConfig.from_yaml failed: {e}"]
+
+    if constraints.require_agentic_service_dry_run and not stage_errors.get("structure"):
+        try:
+            from app.core.common.runtime_reset import reset_runtime_state
+            from app.core.sdk.agentic_service import AgenticService
+
+            reset_runtime_state()
+            AgenticService.load(yaml_path)
+        except Exception as e:
+            stage_errors["agentic_load"] = [f"AgenticService.load dry-run failed: {e}"]
+        finally:
+            try:
+                from app.core.common.runtime_reset import reset_runtime_state
+
+                reset_runtime_state()
+            except Exception:
+                logger.debug("runtime reset skipped after candidate dry-run", exc_info=True)
+
+    all_errors: List[str] = []
+    for errs in stage_errors.values():
+        all_errors.extend(errs)
+
+    return CandidateValidationResult(
+        ok=len(all_errors) == 0,
+        errors=all_errors,
+        stage_errors=stage_errors,
+    )
 
 
 def infer_single_expert_name(yaml_path: str | Path) -> str | None:

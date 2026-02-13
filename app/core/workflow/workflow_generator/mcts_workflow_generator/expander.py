@@ -4,6 +4,7 @@ import json
 from typing import Callable, Dict, List, Tuple
 from uuid import uuid4
 
+from app.core.common.logger import Chat2GraphLogger
 from app.core.common.system_env import SystemEnv
 from app.core.common.type import MessageSourceType
 from app.core.model.message import ModelMessage
@@ -13,6 +14,10 @@ from app.core.prompt.workflow_generator import (
     optimize_op_prompt_template,
 )
 from app.core.reasoner.model_service_factory import ModelService, ModelServiceFactory
+from app.core.workflow.workflow_generator.mcts_workflow_generator.config_assembler import (
+    build_action_constraints,
+    collect_allowed_action_refs,
+)
 from app.core.workflow.workflow_generator.mcts_workflow_generator.model import (
     AgenticConfigSection,
     OptimizeAction,
@@ -76,6 +81,7 @@ class LLMExpander(Expander):
             "feedbacks": "The optimization actions taken from the current system and the resulting feedback",  # noqa: E501
         } 
         self.job_id = "[LLMExpander]expand_" + uuid4().hex  
+        self.logger = Chat2GraphLogger.get_logger(__name__)
 
     def format_context(self, sections: List[str], sections_context: Dict[str, str]) -> str:
         """Format selected sections into a context block for prompting."""
@@ -124,7 +130,10 @@ class LLMExpander(Expander):
         )
 
         # construct prompt
-        prompt = get_actions_prompt_template.format(context=context)
+        prompt = get_actions_prompt_template.format(
+            context=context,
+            available_actions=build_action_constraints(current_actions),
+        )
 
         # filter function to validate LLM output.
         # check if the action list is valid
@@ -199,6 +208,7 @@ class LLMExpander(Expander):
         prompt = optimize_op_prompt_template.format(
             context=context,
             optimize_actions=optimize_acitons,
+            available_actions=build_action_constraints(actions),
         )
 
         # filter function to validate LLM output.
@@ -214,21 +224,13 @@ class LLMExpander(Expander):
                     raise Exception("missing `operators` field in new_configs field.")
 
                 op_fields = ["instruction", "output_schema", "actions"]
-                actions_format = format_yaml_with_anchor(
-                    actions, key=AgenticConfigSection.ACTIONS.value, fields=[]
-                )
-                action_list = ast.literal_eval(actions_format)
+                allowed_action_refs = collect_allowed_action_refs(actions)
                 ops_format = format_yaml_with_anchor(
                     resp.new_configs[AgenticConfigSection.OPERATORS.value],
                     AgenticConfigSection.OPERATORS.value,
                     fields=op_fields,
                 )
                 op_list = ast.literal_eval(ops_format)
-                for action in action_list:
-                    if not isinstance(action, Dict) or "name" not in action:
-                        raise Exception(f"invalid action: {action}")
-
-                action_name_list = [action.get("name", "") for action in action_list]
                 error_messages: List[str] = []
                 for op in op_list:
                     if not isinstance(op, Dict):
@@ -249,9 +251,13 @@ class LLMExpander(Expander):
                         continue
 
                     for action in op_actions:
-                        if action not in action_name_list:
+                        action_ref = action
+                        if isinstance(action, Dict):
+                            action_ref = action.get("name")
+                        if not isinstance(action_ref, str) or action_ref not in allowed_action_refs:
                             error_messages.append(
-                                f"unknown action reference {action}, the referenced action must be in the {action_name_list} list"  # noqa: E501
+                                "unknown action reference "
+                                f"{action}, allowed actions={sorted(allowed_action_refs)}"
                             )
 
                 if len(error_messages) > 0:
@@ -269,7 +275,7 @@ class LLMExpander(Expander):
         try:
             return OptimizeResp.model_validate(optimize_resp)
         except Exception as e:
-            print(f"[LLMExpander][_expand_operator] failed, reason={e}")
+            self.logger.warning("[LLMExpander][_expand_operator] failed, reason=%s", e)
             return OptimizeResp(modifications=[], new_configs={})
 
     async def _expand_experts(
@@ -408,7 +414,7 @@ class LLMExpander(Expander):
         try:
             return OptimizeResp.model_validate(optimize_resp)
         except Exception as e:
-            print(f"[LLMExpander][_expand_experts] failed, reason={e}")
+            self.logger.warning("[LLMExpander][_expand_experts] failed, reason=%s", e)
             return OptimizeResp(modifications=[], new_configs={})
 
     async def _generate(
