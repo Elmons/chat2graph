@@ -1,6 +1,7 @@
 from abc import abstractmethod
 import json
 from pathlib import Path
+import re
 from typing import Dict, List, Literal, Optional, Tuple
 
 from app.core.common.system_env import SystemEnv
@@ -55,6 +56,11 @@ class LLMEvaluator(Evaluator):
             0.0, float(SystemEnv.MCTS_REGRESSION_PENALTY_WEIGHT)
         )
         self._error_penalty_weight = max(0.0, float(SystemEnv.MCTS_ERROR_PENALTY_WEIGHT))
+        self.last_metrics: Dict[str, float] = {
+            "raw_avg_score": 0.0,
+            "regression_rate": 0.0,
+            "error_rate": 0.0,
+        }
 
     async def evaluate_workflow(
         self,
@@ -140,8 +146,20 @@ class LLMEvaluator(Evaluator):
             scorable_records = [
                 (idx, record) for idx, record in enumerate(run_records) if not record.error
             ]
-            for start in range(0, len(scorable_records), self._scoring_batch_size):
-                batch = scorable_records[start : start + self._scoring_batch_size]
+            llm_candidates: List[Tuple[int, object]] = []
+            for idx, record in scorable_records:
+                rule_score = self._rule_based_score(
+                    question=record.task,
+                    expected_answer=record.verifier,
+                    model_output=record.model_output,
+                )
+                if rule_score is None:
+                    llm_candidates.append((idx, record))
+                else:
+                    score_by_index[idx] = rule_score
+
+            for start in range(0, len(llm_candidates), self._scoring_batch_size):
+                batch = llm_candidates[start : start + self._scoring_batch_size]
                 batch_payload = [
                     {
                         "question": record.task,
@@ -204,7 +222,11 @@ class LLMEvaluator(Evaluator):
         with open(results_file, "w", encoding="utf-8") as f:
             json.dump([result.model_dump() for result in results], f, ensure_ascii=False, indent=2)
 
-        objective_score = self._compose_objective_score(avg_score=avg_score, results=results)
+        objective_score, metrics = self._compose_objective_score(
+            avg_score=avg_score,
+            results=results,
+        )
+        self.last_metrics = metrics
 
         # Generate reflection if needed
         if self.need_reflect:
@@ -267,13 +289,19 @@ class LLMEvaluator(Evaluator):
         )
         return ReflectResult.model_validate(resp)
 
-    def _compose_objective_score(self, *, avg_score: float, results: List[ExecuteResult]) -> float:
+    def _compose_objective_score(
+        self, *, avg_score: float, results: List[ExecuteResult]
+    ) -> Tuple[float, Dict[str, float]]:
         """Compute MCTS objective score with stability penalties.
 
         objective = avg_score - w_reg * regression_rate - w_err * execution_error_rate
         """
         if not results:
-            return avg_score
+            return avg_score, {
+                "raw_avg_score": avg_score,
+                "regression_rate": 0.0,
+                "error_rate": 0.0,
+            }
 
         regression_count = 0
         valid_parent_count = 0
@@ -291,11 +319,62 @@ class LLMEvaluator(Evaluator):
         )
         error_rate = error_count / max(len(results), 1)
 
-        return (
+        objective = (
             avg_score
             - self._regression_penalty_weight * regression_rate
             - self._error_penalty_weight * error_rate
         )
+        return objective, {
+            "raw_avg_score": avg_score,
+            "regression_rate": regression_rate,
+            "error_rate": error_rate,
+        }
+
+    @staticmethod
+    def _normalize_text(text: str) -> str:
+        normalized = (text or "").strip()
+        normalized = re.sub(r"^\s*answer\s*:\s*", "", normalized, flags=re.IGNORECASE)
+        normalized = re.sub(r"\s+", " ", normalized)
+        return normalized.strip().lower()
+
+    def _rule_based_score(
+        self, *, question: str, expected_answer: str, model_output: str
+    ) -> Optional[int]:
+        """Fast-path deterministic scoring to reduce LLM noise and latency.
+
+        Returns None when uncertain and fallback to LLM judging.
+        """
+        exp = self._normalize_text(expected_answer)
+        out = self._normalize_text(model_output)
+        if not exp or not out:
+            return None
+        if exp == out:
+            return 3
+
+        # numeric answers (e.g., count questions)
+        if re.fullmatch(r"-?\d+(\.\d+)?", exp):
+            if re.search(rf"\b{re.escape(exp)}\b", out):
+                return 3
+            return None
+
+        # canonical list string answers
+        if exp.startswith("[") and exp.endswith("]"):
+            if exp in out:
+                return 3
+            return None
+
+        # explicit NOT_FOUND style answers
+        if exp in {"not_found", "not found"}:
+            if "not_found" in out or "not found" in out:
+                return 3
+            return None
+
+        # exact inclusion tends to be correct but verbose
+        if exp in out:
+            return 2
+
+        # avoid over-confident rule scoring on semantic text
+        return None
 
     async def _llm_scoring(self, question: str, model_output: str, expected_answer: str) -> int:
         """Score a single workflow execution result via an LLM rubric."""

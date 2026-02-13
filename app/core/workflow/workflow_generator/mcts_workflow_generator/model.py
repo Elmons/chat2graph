@@ -29,6 +29,9 @@ class WorkflowLogFormat(BaseModel):
     round_number: int
     parent_round: Optional[int] = None
     score: float
+    raw_avg_score: Optional[float] = None
+    regression_rate: Optional[float] = None
+    error_rate: Optional[float] = None
     optimize_suggestions: List[OptimizeAction] = []
     modifications: List[str]  
     reflection: str

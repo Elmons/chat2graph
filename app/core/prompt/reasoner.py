@@ -105,7 +105,7 @@ The external system will then execute the function. The results will be added to
     ...
     </key_reasoning_points>
     <final_output>
-    [should be the long and verbose]
+    [should be task-aligned, concise, and complete]
     {output_schema}
     </final_output>
     TASK_DONE
@@ -172,7 +172,7 @@ The external system will then execute the function. The results will be added to
     ...
     </key_reasoning_points>
     <final_output>
-    [should be the long and verbose]
+    [should be task-aligned, concise, and complete]
     {output_schema}
     </final_output>
 </deliverable>

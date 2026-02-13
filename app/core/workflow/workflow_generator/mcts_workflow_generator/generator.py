@@ -339,6 +339,9 @@ class MCTSWorkflowGenerator(WorkflowGenerator):
                 round_number=1,
                 parent_round=None,
                 score=score,
+                raw_avg_score=score,
+                regression_rate=0.0,
+                error_rate=0.0,
                 reflection=reflection,
                 modifications=[],
                 feedbacks=[],
@@ -452,12 +455,16 @@ class MCTSWorkflowGenerator(WorkflowGenerator):
                 optimized_path=self.optimized_path,
                 parent_round=select_round.round_number,
             )
+            eval_metrics = getattr(self.evaluator, "last_metrics", {}) or {}
 
             # save result
             self.logs[round_num] = WorkflowLogFormat(
                 round_number=round_num,
                 parent_round=select_round.round_number,
                 score=score,
+                raw_avg_score=eval_metrics.get("raw_avg_score"),
+                regression_rate=eval_metrics.get("regression_rate"),
+                error_rate=eval_metrics.get("error_rate"),
                 reflection=reflection,
                 modifications=optimize_resp.modifications,
                 feedbacks=[],
