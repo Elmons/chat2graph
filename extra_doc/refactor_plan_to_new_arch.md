@@ -473,6 +473,13 @@ flowchart TB
 - 很难和外部 benchmark / 论文常见分类直接对齐
 - L3/L4 的定义与“系统可用工具能力”之间没有强绑定（容易生成做不到的任务）
 
+调研结论与可落地方案见：`extra_doc/data_synthesis_and_graph_task_taxonomy_research.md`。
+
+要点摘要：
+- 建议将 taxonomy 拆成两层：Task Taxonomy（问的是什么） vs Capability Taxonomy（toolset 能做到什么）。
+- 难度分层从“文案级”升级为“结构级指标”（hop 数、谓词数、pattern shape、是否聚合/排序/算法）。
+- `task_subtype` 建议使用稳定的 `snake_case` id，并显式标注 `required_actions/verifier_type`，以便 dataset 生成时按 toolset 自动裁剪。
+
 建议做的事（这里只列“需要做什么”，不做调研结论）：
 - 做一次调研：收集“图数据库/图查询/图分析”的常见任务分类与 benchmark（例如社交网络、金融风控、知识图谱问答等方向的公开基准），整理一份映射表
   - 可先从若干候选方向入手检索（不保证完整/正确，后续调研再确认）：LDBC SNB、金融/风控类 graph benchmark、GraphChallenge、常见 SPARQL/RDF benchmark、以及 Cypher/SQL on graph 的公开题库/测试集等
