@@ -11,9 +11,15 @@ class OperatorWrapper:
     def __init__(self):
         self._operator: Optional[Operator] = None
 
+        self._id: Optional[str] = None
         self._instruction: Optional[str] = None
         self._output_schema: str = ""
         self._actions: List[Action] = []
+
+    def id(self, operator_id: str) -> "OperatorWrapper":
+        """Set the id of the operator."""
+        self._id = operator_id
+        return self
 
     @property
     def operator(self) -> Operator:
@@ -42,11 +48,19 @@ class OperatorWrapper:
         if not self._instruction:
             raise ValueError("Instruction is required.")
 
-        config = OperatorConfig(
-            instruction=self._instruction,
-            output_schema=self._output_schema,
-            actions=self._actions,
-        )
+        if self._id:
+            config = OperatorConfig(
+                instruction=self._instruction,
+                output_schema=self._output_schema,
+                actions=self._actions,
+                id=self._id,
+            )
+        else:
+            config = OperatorConfig(
+                instruction=self._instruction,
+                output_schema=self._output_schema,
+                actions=self._actions,
+            )
 
         self._operator = Operator(config=config)
 

@@ -5,10 +5,12 @@ from typing import Dict, List, Literal, Optional, Tuple
 
 from app.core.common.system_env import SystemEnv
 from app.core.common.type import MessageSourceType
+from app.core.common.util import parse_jsons
 from app.core.model.message import ModelMessage
 from app.core.prompt.workflow_generator import eval_prompt_template, reflect_prompt_template
 from app.core.reasoner.model_service_factory import ModelService, ModelServiceFactory
 from app.core.workflow.dataset_synthesis.model import Row
+from app.core.workflow.evaluation.openai_batch_file import run_batch_chat
 from app.core.workflow.workflow_generator.mcts_workflow_generator.model import (
     ExecuteResult,
     ReflectResult,
@@ -48,6 +50,7 @@ class LLMEvaluator(Evaluator):
         self.job_id = "[LLMEvaluator]"
         self.need_reflect = need_reflect
         self.main_expert_name = main_expert_name
+        self._scoring_batch_size = max(1, int(SystemEnv.LLM_SCORING_BATCH_SIZE))
 
     async def evaluate_workflow(
         self,
@@ -124,16 +127,30 @@ class LLMEvaluator(Evaluator):
                 )
             avg_score = -1.0
         else:
-            for record in run_records:
+            score_by_index: Dict[int, int] = {}
+            scorable_records = [
+                (idx, record) for idx, record in enumerate(run_records) if not record.error
+            ]
+            for start in range(0, len(scorable_records), self._scoring_batch_size):
+                batch = scorable_records[start : start + self._scoring_batch_size]
+                batch_payload = [
+                    {
+                        "question": record.task,
+                        "expected_answer": record.verifier,
+                        "model_output": record.model_output,
+                    }
+                    for _, record in batch
+                ]
+                batch_scores = await self._llm_batch_scoring(batch_payload)
+                for i, (idx, _) in enumerate(batch):
+                    score_by_index[idx] = batch_scores[i] if i < len(batch_scores) else 0
+
+            for idx, record in enumerate(run_records):
                 parent_score = parent_scores.get(record.task, -1)
                 try:
                     if record.error:
                         raise RuntimeError(record.error)
-                    score = await self._llm_scoring(
-                        question=record.task,
-                        model_output=record.model_output,
-                        expected_answer=record.verifier,
-                    )
+                    score = score_by_index.get(idx, 0)
                     total_score += score
                     succeed: Literal["yes", "no", "unknown"]
                     if parent_score < 0:
@@ -276,3 +293,61 @@ class LLMEvaluator(Evaluator):
             return resp
         else:
             return 0
+
+    async def _llm_batch_scoring(self, batch_items: List[Dict[str, str]]) -> List[int]:
+        """Score multiple execution results in one LLM request.
+
+        Returns one integer score (0-3) per input item, preserving input order.
+        """
+        if not batch_items:
+            return []
+        # Keep scoring prompt unchanged; each item uses eval_prompt_template.
+        prompts = [
+            eval_prompt_template.format(
+                question=item["question"],
+                expected_answer=item["expected_answer"],
+                model_output=item["model_output"],
+            )
+            for item in batch_items
+        ]
+
+        if SystemEnv.LLM_USE_OPENAI_BATCH_FILE and len(batch_items) > 1:
+            try:
+                batch_results = await run_batch_chat(
+                    prompts=prompts,
+                    model=SystemEnv.LLM_NAME,
+                    api_base=SystemEnv.LLM_ENDPOINT,
+                    api_key=SystemEnv.LLM_APIKEY,
+                )
+                scores: List[int] = []
+                for result in batch_results:
+                    if result.error:
+                        scores.append(0)
+                    else:
+                        scores.append(self._parse_score_from_payload(result.content))
+                return scores
+            except Exception:
+                # fallback to sequential scoring to keep MCTS round progressing
+                pass
+
+        scores: List[int] = []
+        for item in batch_items:
+            score = await self._llm_scoring(
+                question=item["question"],
+                model_output=item["model_output"],
+                expected_answer=item["expected_answer"],
+            )
+            scores.append(score)
+        return scores
+
+    def _parse_score_from_payload(self, payload: str) -> int:
+        """Parse score from evaluator payload, fallback to 0 when malformed."""
+        parsed = parse_jsons(payload)
+        for item in parsed:
+            if isinstance(item, dict) and "score" in item:
+                score = item.get("score")
+                if isinstance(score, int):
+                    return max(0, min(3, score))
+                if isinstance(score, float):
+                    return max(0, min(3, int(score)))
+        return 0

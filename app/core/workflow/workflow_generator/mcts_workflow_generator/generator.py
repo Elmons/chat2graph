@@ -1,3 +1,4 @@
+import json
 from pathlib import Path
 import random
 import time
@@ -54,6 +55,9 @@ class MCTSWorkflowGenerator(WorkflowGenerator):
         optimized_path: str = "workflow_space",
         top_k: int = 5,
         max_retries: int = 5,
+        no_improvement_patience: int = 0,
+        resume: bool = False,
+        resume_run_path: Optional[str] = None,
     ):
         """Configure generator dependencies and search hyper-parameters."""
         if optimize_grain is None:
@@ -65,8 +69,15 @@ class MCTSWorkflowGenerator(WorkflowGenerator):
         self.evaluator: Evaluator = evaluator
 
         self.max_rounds = max_rounds
+        self.resume = resume
+        self.no_improvement_patience = max(0, int(no_improvement_patience))
         # self.validate_rounds = validate_rounds
-        self.optimized_path = f"{optimized_path}/{self.dataset.name}_{str(int(time.time()))[-4:-1]}"
+        if self.resume:
+            self.optimized_path = str(resume_run_path or optimized_path)
+        else:
+            self.optimized_path = (
+                f"{optimized_path}/{self.dataset.name}_{str(int(time.time()))[-4:-1]}"
+            )
         self.artifact_writer = MCTSArtifactWriter(self.optimized_path)
         self.top_k = top_k
         self.max_retries = max_retries
@@ -172,6 +183,8 @@ class MCTSWorkflowGenerator(WorkflowGenerator):
                 "toolset_path": self.toolset_path,
                 "max_score": self.max_score,
                 "optimal_round": self.optimal_round,
+                "no_improvement_patience": self.no_improvement_patience,
+                "resume": self.resume,
                 "workflow_constraints": {
                     "main_expert_name": self.workflow_constraints.main_expert_name,
                     "workflow_platform": workflow_platform,
@@ -184,6 +197,91 @@ class MCTSWorkflowGenerator(WorkflowGenerator):
                 },
             },
         )
+
+    def _record_no_improvement(
+        self,
+        *,
+        round_num: int,
+        reason: str,
+        no_improvement_rounds: int,
+    ) -> Tuple[int, bool]:
+        """Update no-improvement streak and determine whether to early-stop."""
+        no_improvement_rounds += 1
+        if self.no_improvement_patience <= 0:
+            return no_improvement_rounds, False
+
+        self.logger.info(
+            "[run]round=%s has no improvement (%s), streak=%s/%s",
+            round_num,
+            reason,
+            no_improvement_rounds,
+            self.no_improvement_patience,
+        )
+        if no_improvement_rounds >= self.no_improvement_patience:
+            self.logger.info(
+                "[run]early stop: no improvement for %s consecutive rounds",
+                self.no_improvement_patience,
+            )
+            return no_improvement_rounds, True
+        return no_improvement_rounds, False
+
+    def _compute_no_improvement_streak(self) -> int:
+        """Compute trailing no-improvement streak from existing logs."""
+        if not self.logs:
+            return 0
+        streak = 0
+        best = float("-inf")
+        for round_num in sorted(self.logs.keys()):
+            score = self.logs[round_num].score
+            if score > best:
+                best = score
+                streak = 0
+            else:
+                streak += 1
+        return streak
+
+    def _load_resume_state(self) -> int:
+        """Restore MCTS state from disk and return the next round number."""
+        log_path = Path(self.optimized_path) / "log" / "log.json"
+        if not log_path.exists():
+            raise ValueError(f"resume failed: log file not found at {log_path}")
+
+        with log_path.open("r", encoding="utf-8") as f:
+            raw_logs = json.load(f)
+        if not isinstance(raw_logs, list) or len(raw_logs) == 0:
+            raise ValueError(f"resume failed: invalid or empty log file at {log_path}")
+
+        restored_logs: Dict[int, WorkflowLogFormat] = {}
+        for item in raw_logs:
+            log = WorkflowLogFormat.model_validate(item)
+            restored_logs[log.round_number] = log
+        self.logs = restored_logs
+
+        if 1 not in self.logs:
+            raise ValueError("resume failed: round1 not found in log history")
+
+        self.max_score = max(log.score for log in self.logs.values())
+        best_rounds = [rn for rn, log in self.logs.items() if log.score == self.max_score]
+        self.optimal_round = min(best_rounds) if best_rounds else 1
+
+        if not self.main_expert_name:
+            round1_workflow = Path(self.optimized_path) / "round1" / "workflow.yml"
+            inferred = infer_single_expert_name(round1_workflow)
+            if inferred:
+                self.main_expert_name = inferred
+        if self.main_expert_name:
+            self.workflow_constraints.main_expert_name = self.main_expert_name
+
+        next_round = max(self.logs.keys()) + 1
+        self.logger.info(
+            "[run]resume loaded from %s, rounds=%s, next_round=%s, best_score=%s, best_round=%s",
+            self.optimized_path,
+            len(self.logs),
+            next_round,
+            self.max_score,
+            self.optimal_round,
+        )
+        return next_round
 
     async def generate(self) -> WorkflowGenerationResult:
         """Run the optimization loop and return the best workflow discovered."""
@@ -203,28 +301,46 @@ class MCTSWorkflowGenerator(WorkflowGenerator):
     async def _generate_rounds(self) -> Tuple[float, int]:
         """Core loop that iteratively expands, evaluates, and scores workflows."""
         train_data, _ = self.split_dataset()
+        no_improvement_rounds = 0
 
-        self.logger.info("[run]init_workflow...")
-        self.init_workflow()
-        score, reflection = await self.evaluator.evaluate_workflow(
-            round_num=1,
-            parent_round=-1,
-            dataset=self.dataset.data,
-            modifications=[],
-            optimized_path=self.optimized_path,
-        )
-        self.logs[1] = WorkflowLogFormat(
-            round_number=1,
-            parent_round=None,
-            score=score,
-            reflection=reflection,
-            modifications=[],
-            feedbacks=[],
-        )
-        self.max_score = score
-        self.optimal_round = 1
-        self.log_save()
-        for round_num in range(2, self.max_rounds + 1):
+        if self.resume:
+            next_round = self._load_resume_state()
+            no_improvement_rounds = self._compute_no_improvement_streak()
+            if (
+                self.no_improvement_patience > 0
+                and no_improvement_rounds >= self.no_improvement_patience
+            ):
+                self.logger.info(
+                    "[run]resume early stop: historical no-improvement streak=%s already "
+                    "reaches patience=%s",
+                    no_improvement_rounds,
+                    self.no_improvement_patience,
+                )
+                return self.max_score, self.optimal_round
+        else:
+            self.logger.info("[run]init_workflow...")
+            self.init_workflow()
+            score, reflection = await self.evaluator.evaluate_workflow(
+                round_num=1,
+                parent_round=-1,
+                dataset=self.dataset.data,
+                modifications=[],
+                optimized_path=self.optimized_path,
+            )
+            self.logs[1] = WorkflowLogFormat(
+                round_number=1,
+                parent_round=None,
+                score=score,
+                reflection=reflection,
+                modifications=[],
+                feedbacks=[],
+            )
+            self.max_score = score
+            self.optimal_round = 1
+            self.log_save()
+            next_round = 2
+
+        for round_num in range(next_round, self.max_rounds + 1):
             self.logger.info("[run]optimize, round=%s...", round_num)
             # Select a workflow
             select_retry_times = 0
@@ -241,6 +357,13 @@ class MCTSWorkflowGenerator(WorkflowGenerator):
                 self.logger.warning(
                     "[run]select workflow failed after %s retries", self.max_retries
                 )
+                no_improvement_rounds, should_stop = self._record_no_improvement(
+                    round_num=round_num,
+                    reason="selector_failed",
+                    no_improvement_rounds=no_improvement_rounds,
+                )
+                if should_stop:
+                    break
                 continue
             # Load Workflow
             current_config = self.load_config_dict(select_round.round_number, skip_section=[])
@@ -254,6 +377,13 @@ class MCTSWorkflowGenerator(WorkflowGenerator):
 
             if optimize_resp is None:
                 self.logger.warning("[run]new flow generate failed, round=%s", round_num)
+                no_improvement_rounds, should_stop = self._record_no_improvement(
+                    round_num=round_num,
+                    reason="expander_failed",
+                    no_improvement_rounds=no_improvement_rounds,
+                )
+                if should_stop:
+                    break
                 continue
 
             # Save workflow
@@ -277,6 +407,13 @@ class MCTSWorkflowGenerator(WorkflowGenerator):
                 self.logger.warning(
                     "[run]exception while saving workflow, round=%s, reason=%s", round_num, e
                 )
+                no_improvement_rounds, should_stop = self._record_no_improvement(
+                    round_num=round_num,
+                    reason="write_failed",
+                    no_improvement_rounds=no_improvement_rounds,
+                )
+                if should_stop:
+                    break
                 continue
 
             validation = validate_candidate_config(
@@ -290,6 +427,13 @@ class MCTSWorkflowGenerator(WorkflowGenerator):
                     round_num,
                     validation.errors,
                 )
+                no_improvement_rounds, should_stop = self._record_no_improvement(
+                    round_num=round_num,
+                    reason="validation_failed",
+                    no_improvement_rounds=no_improvement_rounds,
+                )
+                if should_stop:
+                    break
                 continue
 
             # Evaluate the new node
@@ -318,6 +462,16 @@ class MCTSWorkflowGenerator(WorkflowGenerator):
             if self.logs[round_num].score > self.max_score:
                 self.max_score = self.logs[round_num].score
                 self.optimal_round = round_num
+                no_improvement_rounds = 0
+            else:
+                no_improvement_rounds, should_stop = self._record_no_improvement(
+                    round_num=round_num,
+                    reason="score_not_improved",
+                    no_improvement_rounds=no_improvement_rounds,
+                )
+                if should_stop:
+                    self.log_save()
+                    break
             self.log_save()
 
         return self.max_score, self.optimal_round

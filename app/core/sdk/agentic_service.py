@@ -315,36 +315,35 @@ class AgenticService(metaclass=Singleton):
                 actions_dict[action.name] = action
 
         workflow_items: List[Union[OperatorWrapper, Tuple[OperatorWrapper, ...]]] = []
+        operator_cache: Dict[str, OperatorWrapper] = {}
+
+        def _get_or_create_operator(op_config) -> OperatorWrapper:
+            cached = operator_cache.get(op_config.id)
+            if cached:
+                return cached
+
+            operator_actions = [actions_dict[action_name] for action_name in op_config.actions]
+            operator = (
+                OperatorWrapper()
+                .id(op_config.id)
+                .instruction(op_config.instruction)
+                .output_schema(op_config.output_schema)
+                .actions(operator_actions)
+                .build()
+            )
+            operator_cache[op_config.id] = operator
+            return operator
 
         # build the workflow for the expert, which can consist of multiple operator chains
         for op_config_chain in expert_config.workflow:
             if len(op_config_chain) == 1:
                 # single operator - add directly
-                op_config = op_config_chain[0]
-                operator_actions = [actions_dict[action_name] for action_name in op_config.actions]
-                operator = (
-                    OperatorWrapper()
-                    .instruction(op_config.instruction)
-                    .output_schema(op_config.output_schema)
-                    .actions(operator_actions)
-                    .build()
-                )
-                workflow_items.append(operator)
+                workflow_items.append(_get_or_create_operator(op_config_chain[0]))
             else:
                 # multiple operators - create tuple for parallel execution
                 operator_chain: List[OperatorWrapper] = []
                 for op_config in op_config_chain:
-                    operator_actions = [
-                        actions_dict[action_name] for action_name in op_config.actions
-                    ]
-                    operator = (
-                        OperatorWrapper()
-                        .instruction(op_config.instruction)
-                        .output_schema(op_config.output_schema)
-                        .actions(operator_actions)
-                        .build()
-                    )
-                    operator_chain.append(operator)
+                    operator_chain.append(_get_or_create_operator(op_config))
                 workflow_items.append(tuple(operator_chain))
 
         return tuple(workflow_items)

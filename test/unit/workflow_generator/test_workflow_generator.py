@@ -2,12 +2,12 @@ from __future__ import annotations
 
 import json
 from pathlib import Path
+from types import SimpleNamespace
 from typing import Dict, List
 from unittest.mock import AsyncMock
 
 import pytest
 
-from app.core.model.message import TextMessage
 from app.core.workflow.dataset_synthesis.model import Row, WorkflowTrainDataset
 from app.core.workflow.dataset_synthesis.task_subtypes import GraphTaskTypesInfo
 from app.core.workflow.workflow_generator.mcts_workflow_generator.evaluator import (
@@ -171,6 +171,23 @@ class _StubEvaluator(Evaluator):
         return float(round_num), f"reflection-{round_num}"
 
 
+class _FlatScoreEvaluator(Evaluator):
+    def __init__(self, score: float = 1.0):
+        self.score = score
+        self.calls: List[int] = []
+
+    async def evaluate_workflow(  # noqa: D401
+        self,
+        optimized_path: str,
+        round_num: int,
+        parent_round: int,
+        dataset: List[Row],
+        modifications: List[str],
+    ) -> tuple[float, str]:
+        self.calls.append(round_num)
+        return self.score, f"reflection-{round_num}"
+
+
 def test_mixed_probability_selector_select(monkeypatch):
     selector = MixedProbabilitySelector()
     logs = {
@@ -289,35 +306,39 @@ async def test_llm_evaluator_evaluate_workflow(monkeypatch, tmp_path):
     optimized_path = tmp_path / "workspace"
 
     evaluator = LLMEvaluator(need_reflect=True)
+    evaluator._scoring_batch_size = 1
     mocked_scoring = AsyncMock(return_value=3)
     mocked_reflect = AsyncMock(
         return_value=ReflectResult(failed_reason=["f"], optimize_suggestion=["s"])
     )
 
-    class _StubJobWrapper:
-        def __init__(self, payload: str):
-            self._payload = payload
-
-        def wait(self):  # noqa: D401
-            return TextMessage(payload=self._payload)
-
-    class _StubAgent:
-        def __init__(self):
-            self.counter = 0
-
-        def session(self):  # noqa: D401
-            return self
-
-        def submit(self, message):  # noqa: D401
-            payload = f"output-{self.counter}"
-            self.counter += 1
-            return _StubJobWrapper(payload)
+    async def _fake_run_dataset(
+        self,
+        *,
+        workflow_path,
+        rows,
+        graph_db_config=None,
+        reset_state=True,
+    ):
+        records = []
+        for idx, row in enumerate(rows):
+            records.append(
+                SimpleNamespace(
+                    task=row.task,
+                    verifier=row.verifier,
+                    model_output=f"output-{idx}",
+                    error="",
+                    latency_ms=10.0,
+                    tokens=0,
+                )
+            )
+        return records
 
     evaluator._llm_scoring = mocked_scoring
     evaluator._reflect = mocked_reflect
     monkeypatch.setattr(
-        "app.core.workflow.workflow_generator.mcts_workflow_generator.evaluator.load_agentic_service",
-        lambda optimized_path, round_num: _StubAgent(),
+        "app.core.workflow.workflow_generator.mcts_workflow_generator.evaluator.WorkflowRunner.run_dataset",
+        _fake_run_dataset,
     )
     monkeypatch.setattr(
         "app.core.workflow.workflow_generator.mcts_workflow_generator.evaluator.load_execute_result",
@@ -364,6 +385,10 @@ async def test_mcts_generator_generate_rounds(monkeypatch, tmp_path):
         "app.core.workflow.workflow_generator.mcts_workflow_generator.generator.time.time",
         lambda: 1_700_000_000,
     )
+    monkeypatch.setattr(
+        "app.core.workflow.workflow_generator.mcts_workflow_generator.generator.validate_candidate_config",
+        lambda *args, **kwargs: SimpleNamespace(ok=True, errors=[]),
+    )
 
     generator = MCTSWorkflowGenerator(
         db=None,
@@ -386,6 +411,119 @@ async def test_mcts_generator_generate_rounds(monkeypatch, tmp_path):
     assert stub_selector.calls
     assert stub_evaluator.calls == [1, 2]
     assert 2 in generator.logs
+
+
+@pytest.mark.asyncio
+async def test_mcts_generator_early_stop_on_no_improvement(monkeypatch, tmp_path):
+    dataset = _make_dataset()
+    base_path = Path(__file__).resolve().parents[3]
+    init_template = (
+        base_path
+        / "app"
+        / "core"
+        / "workflow"
+        / "workflow_generator"
+        / "mcts_workflow_generator"
+        / "init_template"
+        / "basic_template.yml"
+    )
+
+    monkeypatch.setattr(
+        "app.core.workflow.workflow_generator.mcts_workflow_generator.generator.time.time",
+        lambda: 1_700_000_010,
+    )
+    monkeypatch.setattr(
+        "app.core.workflow.workflow_generator.mcts_workflow_generator.generator.validate_candidate_config",
+        lambda *args, **kwargs: SimpleNamespace(ok=True, errors=[]),
+    )
+
+    flat_evaluator = _FlatScoreEvaluator(score=1.0)
+    generator = MCTSWorkflowGenerator(
+        db=None,
+        dataset=dataset,
+        selector=_StubSelector(),
+        expander=_StubExpander(),
+        evaluator=flat_evaluator,
+        optimize_grain=[AgenticConfigSection.OPERATORS, AgenticConfigSection.EXPERTS],
+        init_template_path=str(init_template),
+        max_rounds=5,
+        optimized_path=str(tmp_path),
+        top_k=2,
+        max_retries=1,
+        no_improvement_patience=2,
+    )
+
+    max_score, optimal_round = await generator._generate_rounds()
+
+    assert max_score == 1.0
+    assert optimal_round == 1
+    assert flat_evaluator.calls == [1, 2, 3]
+    assert 3 in generator.logs
+    assert 4 not in generator.logs
+
+
+@pytest.mark.asyncio
+async def test_mcts_generator_resume_from_existing_logs(monkeypatch, tmp_path):
+    dataset = _make_dataset()
+    base_path = Path(__file__).resolve().parents[3]
+    init_template = (
+        base_path
+        / "app"
+        / "core"
+        / "workflow"
+        / "workflow_generator"
+        / "mcts_workflow_generator"
+        / "init_template"
+        / "basic_template.yml"
+    )
+
+    monkeypatch.setattr(
+        "app.core.workflow.workflow_generator.mcts_workflow_generator.generator.time.time",
+        lambda: 1_700_000_020,
+    )
+    monkeypatch.setattr(
+        "app.core.workflow.workflow_generator.mcts_workflow_generator.generator.validate_candidate_config",
+        lambda *args, **kwargs: SimpleNamespace(ok=True, errors=[]),
+    )
+
+    first_evaluator = _StubEvaluator()
+    first_generator = MCTSWorkflowGenerator(
+        db=None,
+        dataset=dataset,
+        selector=_StubSelector(),
+        expander=_StubExpander(),
+        evaluator=first_evaluator,
+        optimize_grain=[AgenticConfigSection.OPERATORS, AgenticConfigSection.EXPERTS],
+        init_template_path=str(init_template),
+        max_rounds=2,
+        optimized_path=str(tmp_path),
+        top_k=2,
+        max_retries=1,
+    )
+    await first_generator._generate_rounds()
+    assert first_evaluator.calls == [1, 2]
+
+    resumed_evaluator = _StubEvaluator()
+    resumed_generator = MCTSWorkflowGenerator(
+        db=None,
+        dataset=dataset,
+        selector=_StubSelector(),
+        expander=_StubExpander(),
+        evaluator=resumed_evaluator,
+        optimize_grain=[AgenticConfigSection.OPERATORS, AgenticConfigSection.EXPERTS],
+        init_template_path=str(init_template),
+        max_rounds=4,
+        optimized_path=first_generator.optimized_path,
+        top_k=2,
+        max_retries=1,
+        resume=True,
+    )
+    max_score, optimal_round = await resumed_generator._generate_rounds()
+
+    assert resumed_evaluator.calls == [3, 4]
+    assert max_score == 4
+    assert optimal_round == 4
+    assert all(r in resumed_generator.logs for r in [1, 2, 3, 4])
 
 
 def test_mcts_generator_load_config_dict(monkeypatch, tmp_path):

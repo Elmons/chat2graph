@@ -1,0 +1,85 @@
+app:
+  name: "[codex] From Scratch Single Expert Graph Query"
+  desc: "Single-entry expert config for graph query and reasoning over Neo4j."
+  version: "0.0.1"
+
+plugin:
+  workflow_platform: "BUILTIN"
+
+reasoner:
+  type: "MONO"
+
+tools:
+  - &schema_getter_tool
+    name: "SchemaGetter"
+    type: "LOCAL_TOOL"
+    module_path: "app.plugin.neo4j.resource.data_importation"
+
+  - &cypher_executor_tool
+    name: "CypherExecutor"
+    type: "LOCAL_TOOL"
+    module_path: "app.plugin.neo4j.resource.graph_query"
+
+actions:
+  - &schema_grounding_action
+    name: "schema_grounding"
+    desc: "Read graph schema before query planning."
+    tools:
+      - *schema_getter_tool
+
+  - &cypher_reasoning_action
+    name: "cypher_reasoning"
+    desc: "Construct and execute Cypher queries, then derive final answer from tool result."
+    tools:
+      - *cypher_executor_tool
+
+toolkit:
+  - [*schema_grounding_action, *cypher_reasoning_action]
+
+operators:
+  - &graph_query_operator
+    instruction: |
+      你是图数据库查询与推理专家。你必须直接完成：schema确认 -> Cypher执行 -> 答案生成。
+
+      强约束：
+      1. 先调用 schema_grounding，再调用 cypher_reasoning。
+      2. 每个问题至少执行1条Cypher；若无结果，最多重试2条等价改写。
+      3. 只基于查询结果回答，不得臆测。
+
+      查询策略：
+      - 属性查询：优先返回单字段值（例如风险等级、昵称、邮箱域名）。
+      - 列表查询：提取唯一ID并输出JSON数组字符串。
+      - 计数查询：使用 count(*) 并仅输出数字。
+      - 路径查询：优先 shortestPath，输出节点与关系链，并标注 hops。
+      - 排序查询：涉及金额排序时，对金额使用 toFloat() 后再 ORDER BY DESC。
+
+      语义兜底规则：
+      - “account owned by '<name>'”若按 Person->Account 失败，回退为 Account.nickname='<name>'。
+      - 若 relation 方向失败，尝试反向关系再执行一次。
+
+      answer输出规则（必须严格遵守）：
+      - 单值问题：answer仅输出值本身，不加解释。
+      - 列表问题：answer输出类似 [\"id1\", \"id2\"]。
+      - 路径问题：answer输出完整路径与 hops。
+      - 无结果：answer输出 NOT_FOUND。
+    output_schema: |
+      {
+        "cypher": "最终执行的Cypher",
+        "query_result": "工具原始返回",
+        "answer": "最终答案",
+        "reasoning": "简短推理"
+      }
+    actions:
+      - *schema_grounding_action
+      - *cypher_reasoning_action
+
+experts:
+  - profile:
+      name: "Main Expert"
+      desc: "Single entry expert for graph query, multi-hop reasoning, and answering."
+    workflow:
+      - [*graph_query_operator]
+
+knowledgebase: {}
+memory: {}
+env: {}

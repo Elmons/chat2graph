@@ -22,7 +22,9 @@ Edit constants in `eval_yaml_method_benchmark.py`:
 - `YAML_PATH`: YAML file to evaluate.
 - `DATASET_PATH`: dataset JSON path.
 - `TASK_DESC`: task description used when loading dataset.
-- `MAIN_EXPERT_NAME`: entry expert name (single-expert YAML usually uses `"Main Expert"`).
+- `MAIN_EXPERT_NAME`: entry expert name. Set `None` to auto-infer from YAML.
+  - If YAML has exactly one expert, it will be inferred automatically.
+  - If YAML has multiple experts, you should set this explicitly.
 - `SCORE_MODE`: `"llm"` or `"exact"` (current default is `"llm"`).
 
 Example:
@@ -31,7 +33,7 @@ Example:
 TASK_DESC = "你的主要职责是解决关于图数据库的各种问题，包括实体查询、多跳推理等等"
 DATASET_PATH = "test/example/workflow_generator/data_example.json"
 YAML_PATH = "test/example/workflow_generator/eval_suite/yamls/[codex]_graph_query_single_expert_builtin.yml"
-MAIN_EXPERT_NAME = "Main Expert"
+MAIN_EXPERT_NAME = None
 SCORE_MODE = "llm"
 ```
 

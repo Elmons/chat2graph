@@ -41,6 +41,7 @@ class OperatorConfig:
     instruction: str
     output_schema: str
     actions: List[str] = field(default_factory=list)
+    id: str = field(default_factory=lambda: str(uuid4()))
 
 
 @dataclass
@@ -120,6 +121,32 @@ class AgenticConfig:
     @classmethod
     def _create_from_dict(cls, config_dict: Dict[str, Any]) -> "AgenticConfig":
         """Create an AgenticConfig object from a dictionary."""
+        def _extract_action_names(raw_actions: Any) -> List[str]:
+            names: List[str] = []
+            if not isinstance(raw_actions, list):
+                return names
+
+            for action_ref in raw_actions:
+                if isinstance(action_ref, dict) and "name" in action_ref:
+                    action_name = action_ref["name"]
+                    if isinstance(action_name, str) and action_name.strip():
+                        names.append(action_name.strip())
+                elif isinstance(action_ref, str) and action_ref.strip():
+                    names.append(action_ref.strip())
+            return names
+
+        def _operator_ref_key(
+            op_dict: Dict[str, Any],
+        ) -> Union[str, tuple[str, str, tuple[str, ...]]]:
+            op_id = op_dict.get("id")
+            if isinstance(op_id, str) and op_id.strip():
+                return f"id:{op_id.strip()}"
+            return (
+                op_dict.get("instruction", ""),
+                op_dict.get("output_schema", ""),
+                tuple(_extract_action_names(op_dict.get("actions", []))),
+            )
+
         # app configuration
         app_dict = config_dict.get("app", {})
         app_config = AppConfig(
@@ -192,6 +219,23 @@ class AgenticConfig:
                 if tool_name in tools_dict:
                     action.tools.append(tools_dict[tool_name])
 
+        # operator configuration registry:
+        # reuse the same OperatorConfig object when workflow references the same
+        # operator definition repeatedly (e.g. YAML anchors in DAG fan-in/out).
+        operator_configs: Dict[Union[str, tuple[str, str, tuple[str, ...]]], OperatorConfig] = {}
+        for op_dict in config_dict.get("operators", []):
+            if not isinstance(op_dict, dict):
+                continue
+            op_key = _operator_ref_key(op_dict)
+            if op_key in operator_configs:
+                continue
+            operator_configs[op_key] = OperatorConfig(
+                instruction=op_dict.get("instruction", ""),
+                output_schema=op_dict.get("output_schema", ""),
+                actions=_extract_action_names(op_dict.get("actions", [])),
+                id=op_dict.get("id", str(uuid4())),
+            )
+
         # toolkit configuration (step 4): handle all action chains
         toolkit: List[List[ActionConfig]] = []
         for action_chain in config_dict.get("toolkit", []):
@@ -239,18 +283,15 @@ class AgenticConfig:
                         and "actions" in op_ref
                     )
 
-                    # actions configuration in operator
-                    action_names: List[str] = []
-                    for action_ref in op_ref["actions"]:
-                        if isinstance(action_ref, dict) and "name" in action_ref:
-                            action_names.append(action_ref["name"])
-                    op_configs.append(
-                        OperatorConfig(
+                    op_key = _operator_ref_key(op_ref)
+                    if op_key not in operator_configs:
+                        operator_configs[op_key] = OperatorConfig(
                             instruction=op_ref["instruction"],
                             output_schema=op_ref["output_schema"],
-                            actions=action_names,
+                            actions=_extract_action_names(op_ref["actions"]),
+                            id=op_ref.get("id", str(uuid4())),
                         )
-                    )
+                    op_configs.append(operator_configs[op_key])
 
                 if op_configs:
                     workflow_chains.append(op_configs)

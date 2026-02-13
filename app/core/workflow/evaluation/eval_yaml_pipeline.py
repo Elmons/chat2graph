@@ -18,6 +18,7 @@ from app.core.prompt.workflow_generator import eval_prompt_template
 from app.core.reasoner.model_service_factory import ModelService, ModelServiceFactory
 from app.core.workflow.dataset_synthesis.model import WorkflowTrainDataset
 from app.core.workflow.dataset_synthesis.utils import load_workflow_train_dataset
+from app.core.workflow.evaluation.openai_batch_file import run_batch_chat
 from app.core.workflow.workflow_generator.mcts_workflow_generator.model import ExecuteResult
 from app.core.workflow.workflow_generator.mcts_workflow_generator.runner import WorkflowRunner
 
@@ -75,6 +76,70 @@ async def _score_llm(
             if isinstance(score, float):
                 return int(score)
     return 0
+
+
+def _parse_score_payload(payload: str) -> int:
+    from app.core.common.util import parse_jsons
+
+    parsed = parse_jsons(payload)
+    for item in parsed:
+        if isinstance(item, dict) and "score" in item:
+            score = item.get("score")
+            if isinstance(score, int):
+                return max(0, min(3, score))
+            if isinstance(score, float):
+                return max(0, min(3, int(score)))
+    return 0
+
+
+async def _score_llm_batch(
+    *,
+    model: ModelService,
+    batch_items: List[Dict[str, str]],
+) -> List[int]:
+    """Score multiple QA outputs while preserving input order.
+
+    Uses OpenAI-compatible Batch File when enabled; otherwise falls back to sequential scoring.
+    """
+    if not batch_items:
+        return []
+    prompts = [
+        eval_prompt_template.format(
+            question=item["question"],
+            expected_answer=item["expected_answer"],
+            model_output=item["model_output"],
+        )
+        for item in batch_items
+    ]
+
+    if SystemEnv.LLM_USE_OPENAI_BATCH_FILE and len(batch_items) > 1:
+        try:
+            batch_results = await run_batch_chat(
+                prompts=prompts,
+                model=SystemEnv.LLM_NAME,
+                api_base=SystemEnv.LLM_ENDPOINT,
+                api_key=SystemEnv.LLM_APIKEY,
+            )
+            scores: List[int] = []
+            for result in batch_results:
+                if result.error:
+                    scores.append(0)
+                else:
+                    scores.append(_parse_score_payload(result.content))
+            return scores
+        except Exception:
+            pass
+
+    scores: List[int] = []
+    for item in batch_items:
+        score = await _score_llm(
+            model=model,
+            question=item["question"],
+            expected_answer=item["expected_answer"],
+            model_output=item["model_output"],
+        )
+        scores.append(score)
+    return scores
 
 
 @dataclass(frozen=True)
@@ -161,12 +226,17 @@ async def evaluate_yaml(
 
     try:
         scorer_llm: Optional[ModelService] = None
+        scoring_batch_size = max(1, int(SystemEnv.LLM_SCORING_BATCH_SIZE))
         if score_mode == "llm":
             scorer_llm = ModelServiceFactory.create(
                 model_platform_type=SystemEnv.MODEL_PLATFORM_TYPE
             )
 
-        runner = WorkflowRunner(main_expert_name=main_expert_name, batch_size=5, suppress_stdout=True)
+        runner = WorkflowRunner(
+            main_expert_name=main_expert_name,
+            batch_size=5,
+            suppress_stdout=True,
+        )
         run_records = await runner.run_dataset(
             workflow_path=yaml_path,
             rows=dataset.data,
@@ -180,21 +250,38 @@ async def evaluate_yaml(
         total_tokens = 0
         success_count = 0
         error_breakdown: Dict[str, int] = {}
+        score_by_index: Dict[int, int] = {}
 
-        for record in run_records:
+        if score_mode == "llm":
+            assert scorer_llm is not None
+            scorable_records = [
+                (idx, record) for idx, record in enumerate(run_records) if not record.error
+            ]
+            for start in range(0, len(scorable_records), scoring_batch_size):
+                batch = scorable_records[start : start + scoring_batch_size]
+                batch_payload = [
+                    {
+                        "question": record.task,
+                        "expected_answer": record.verifier,
+                        "model_output": record.model_output,
+                    }
+                    for _, record in batch
+                ]
+                batch_scores = await _score_llm_batch(
+                    model=scorer_llm,
+                    batch_items=batch_payload,
+                )
+                for i, (idx, _) in enumerate(batch):
+                    score_by_index[idx] = batch_scores[i] if i < len(batch_scores) else 0
+
+        for idx, record in enumerate(run_records):
             total_latency_ms += record.latency_ms
             total_tokens += int(record.tokens)
             score = 0
             error = record.error
             if not error:
                 if score_mode == "llm":
-                    assert scorer_llm is not None
-                    score = await _score_llm(
-                        model=scorer_llm,
-                        question=record.task,
-                        expected_answer=record.verifier,
-                        model_output=record.model_output,
-                    )
+                    score = score_by_index.get(idx, 0)
                 else:
                     score = _score_exact(
                         expected_answer=record.verifier,
@@ -267,6 +354,9 @@ async def evaluate_yaml(
         "dataset_name": dataset.name,
         "num_rows": len(dataset.data),
         "score_mode": score_mode,
+        "llm_scoring_batch_size": (
+            max(1, int(SystemEnv.LLM_SCORING_BATCH_SIZE)) if score_mode == "llm" else 1
+        ),
         "main_expert_name": main_expert_name,
         "graph_db_config": _serialize_graph_db_config(normalized_graph_db),
         "started_at": started_at_iso,
