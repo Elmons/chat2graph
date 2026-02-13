@@ -132,6 +132,77 @@ class LLMExpander(Expander):
             return selected[:max_actions]
         return actions[:max_actions]
 
+    @staticmethod
+    def _validate_workflow_topology(
+        workflow: List[List[str]], available_operator_names: List[str]
+    ) -> List[str]:
+        """Validate workflow DAG topology and enforce exactly one tail operator."""
+        errors: List[str] = []
+        available_set = set(available_operator_names)
+        nodes: set[str] = set()
+        edges: set[tuple[str, str]] = set()
+
+        if len(workflow) == 0:
+            return ["expert.workflow must be non-empty"]
+
+        for dependency_list in workflow:
+            if not isinstance(dependency_list, List):
+                errors.append(
+                    f"invalid workflow syntax: {dependency_list}, it must be a array"
+                )
+                continue
+            if len(dependency_list) == 0:
+                errors.append("invalid workflow syntax: dependency chain must be non-empty")
+                continue
+
+            chain_nodes: List[str] = []
+            for op in dependency_list:
+                if not isinstance(op, str) or not op.strip():
+                    errors.append(f"invalid workflow operator reference: {op!r}")
+                    continue
+                if op not in available_set:
+                    errors.append(
+                        "unknown operator reference "
+                        f"{op}, it must be in {available_operator_names}"
+                    )
+                    continue
+                chain_nodes.append(op)
+                nodes.add(op)
+
+            for idx in range(len(chain_nodes) - 1):
+                edges.add((chain_nodes[idx], chain_nodes[idx + 1]))
+
+        if len(nodes) == 0:
+            errors.append("expert.workflow must reference at least one valid operator")
+            return errors
+
+        in_deg: Dict[str, int] = dict.fromkeys(nodes, 0)
+        out_deg: Dict[str, int] = dict.fromkeys(nodes, 0)
+        adj: Dict[str, List[str]] = {node: [] for node in nodes}
+        for src, dst in edges:
+            adj[src].append(dst)
+            out_deg[src] += 1
+            in_deg[dst] += 1
+
+        queue: List[str] = [node for node in nodes if in_deg[node] == 0]
+        visited = 0
+        while queue:
+            current = queue.pop()
+            visited += 1
+            for nxt in adj[current]:
+                in_deg[nxt] -= 1
+                if in_deg[nxt] == 0:
+                    queue.append(nxt)
+
+        if visited != len(nodes):
+            errors.append("expert.workflow must be a DAG (cycle detected)")
+
+        tails = [node for node in nodes if out_deg[node] == 0]
+        if len(tails) != 1:
+            errors.append(f"workflow must have exactly 1 tail operator, got {len(tails)}")
+
+        return errors
+
     async def _get_optimize_actions(
         self,
         task_desc: str,
@@ -432,17 +503,12 @@ class LLMExpander(Expander):
                         )
                         continue
 
-                    for dependency_list in expert_workflow:
-                        if not isinstance(dependency_list, List):
-                            error_messages.append(
-                                f"invalid workflow syntax: {dependency_list}, it must be a array"
-                            )
-                            continue
-                        for op in dependency_list:
-                            if op not in op_name_list:
-                                error_messages.append(
-                                    f"unknown operator reference {op}, the referenced action must be in the {op_list} list"  # noqa: E501
-                                )
+                    error_messages.extend(
+                        self._validate_workflow_topology(
+                            workflow=expert_workflow,
+                            available_operator_names=op_name_list,
+                        )
+                    )
 
                 if len(error_messages) > 0:
                     raise Exception(f"{error_messages}")

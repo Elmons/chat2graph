@@ -288,6 +288,39 @@ async def test_llm_expander_expand_raises_when_no_actions(monkeypatch):
     assert mocked_generate.await_count == expander.max_retry
 
 
+def test_llm_expander_validate_workflow_topology_single_tail(monkeypatch):
+    monkeypatch.setattr(
+        "app.core.workflow.workflow_generator.mcts_workflow_generator.expander.ModelServiceFactory.create",
+        lambda *args, **kwargs: None,
+    )
+
+    expander = LLMExpander()
+    errors = expander._validate_workflow_topology(
+        workflow=[
+            ["operator_one", "operator_two"],
+            ["operator_one", "operator_three", "operator_two"],
+        ],
+        available_operator_names=["operator_one", "operator_two", "operator_three"],
+    )
+
+    assert errors == []
+
+
+def test_llm_expander_validate_workflow_topology_rejects_multi_tail(monkeypatch):
+    monkeypatch.setattr(
+        "app.core.workflow.workflow_generator.mcts_workflow_generator.expander.ModelServiceFactory.create",
+        lambda *args, **kwargs: None,
+    )
+
+    expander = LLMExpander()
+    errors = expander._validate_workflow_topology(
+        workflow=[["operator_one", "operator_two"], ["operator_one", "operator_three"]],
+        available_operator_names=["operator_one", "operator_two", "operator_three"],
+    )
+
+    assert any("exactly 1 tail operator" in err for err in errors)
+
+
 @pytest.mark.asyncio
 async def test_llm_evaluator_evaluate_workflow(monkeypatch, tmp_path):
     dataset = _make_dataset().data[:2]
