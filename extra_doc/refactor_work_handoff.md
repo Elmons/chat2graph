@@ -159,6 +159,12 @@
 - Next: Milestone I：新增离线 YAML 评测入口（dataset+yaml→results/summary/leaderboard），默认离线可跑，支持 opt-in 的 LLM 打分。
 
 - What: Milestone I（最小版本）落地：新增离线 YAML 评测入口 `app/core/workflow/evaluation/eval_yaml_pipeline.py`，支持对单个/多个 YAML 在 dataset 上运行并输出 `results.json`/`summary.json`/`leaderboard.json`；默认 `exact` 打分（离线可跑），可选 `llm` 打分（opt-in）。
-- Commit: (pending)
+- Commit: 65914f6
 - Tests (mock-only): `.venv/bin/pytest -m "not real_llm"`
 - Next: （按需）为 `llm` 打分补充 `real_llm` smoke 用例并保持 opt-in；根据实验需要补充 leaderboard 指标（耗时/错误分类等）。
+
+- What: 补全“数据合成方案调研 + 图数据库任务难度分类/benchmark 对齐”文档，并在重构计划（8.3 taxonomy）处回链。
+- Commit: e55b992
+- Docs: `extra_doc/data_synthesis_and_graph_task_taxonomy_research.md`
+- Tests: N/A（文档改动）
+- Next: 按文档建议推进 RowV2（可执行 verifier + expected）与 subtype id/required_actions 绑定（独立 commit）。
