@@ -1,6 +1,9 @@
+import asyncio
+import random
 import re
 from typing import Any, Dict, List, Optional, Union, cast
 
+from app.core.common.logger import Chat2GraphLogger
 from app.core.common.system_env import SystemEnv
 from app.core.common.type import MessageSourceType
 from app.core.model.message import ModelMessage
@@ -30,6 +33,14 @@ class LiteLlmClient(ModelService):
 
         self._max_tokens: int = SystemEnv.MAX_TOKENS
         self._max_completion_tokens: int = SystemEnv.MAX_COMPLETION_TOKENS
+        self._rate_limit_retry_times: int = max(1, int(SystemEnv.LLM_RATE_LIMIT_RETRY_TIMES))
+        self._retry_backoff_base_seconds: float = max(
+            0.1, float(SystemEnv.LLM_RETRY_BACKOFF_BASE_SECONDS)
+        )
+        self._retry_backoff_max_seconds: float = max(
+            self._retry_backoff_base_seconds, float(SystemEnv.LLM_RETRY_BACKOFF_MAX_SECONDS)
+        )
+        self.logger = Chat2GraphLogger.get_logger(__name__)
 
     @staticmethod
     def _ensure_aiohttp_compat() -> None:
@@ -68,18 +79,46 @@ class LiteLlmClient(ModelService):
         from litellm.litellm_core_utils.streaming_handler import CustomStreamWrapper
         from litellm.types.utils import ModelResponse, StreamingChoices
 
-        model_response: Union[ModelResponse, CustomStreamWrapper] = completion(
-            model=self._model_alias,
-            api_base=self._api_base,
-            api_key=self._api_key,
-            messages=litellm_messages,
-            temperature=self._temperature,
-            max_tokens=self._max_tokens,
-            max_completion_tokens=self._max_completion_tokens,
-            stream=False,
-            timeout=self._timeout_seconds,
-            max_retries=self._max_retries,
-        )
+        model_response: Union[ModelResponse, CustomStreamWrapper]
+        attempts = max(self._rate_limit_retry_times, 1)
+        last_error: Optional[Exception] = None
+
+        for attempt in range(1, attempts + 1):
+            try:
+                model_response = completion(
+                    model=self._model_alias,
+                    api_base=self._api_base,
+                    api_key=self._api_key,
+                    messages=litellm_messages,
+                    temperature=self._temperature,
+                    max_tokens=self._max_tokens,
+                    max_completion_tokens=self._max_completion_tokens,
+                    stream=False,
+                    timeout=self._timeout_seconds,
+                    max_retries=self._max_retries,
+                )
+                break
+            except Exception as e:  # noqa: BLE001
+                last_error = e
+                if self._is_rate_limit_error(e) and attempt < attempts:
+                    backoff = min(
+                        self._retry_backoff_max_seconds,
+                        self._retry_backoff_base_seconds * (2 ** (attempt - 1)),
+                    ) + random.uniform(0, 0.3)
+                    self.logger.warning(
+                        "[LiteLlmClient] rate limited, backing off %.2fs (attempt=%s/%s)",
+                        backoff,
+                        attempt,
+                        attempts,
+                    )
+                    await asyncio.sleep(backoff)
+                    continue
+                raise
+        else:
+            if last_error is not None:
+                raise last_error
+            raise RuntimeError("LiteLlmClient failed with unknown error")
+
         if isinstance(model_response, CustomStreamWrapper) or isinstance(
             model_response.choices[0], StreamingChoices
         ):
@@ -197,17 +236,17 @@ class LiteLlmClient(ModelService):
         # convert the conversation messages for LiteLLM
         for i, message in enumerate(messages):
             # handle the func call information in the agent message
-            base_message_content = message.get_payload()
+            base_message_content = message.get_payload() or ""
             func_call_results = message.get_function_calls()
             if func_call_results:
                 base_message_content += (
                     "<function_call_result>\n"
                     + "\n".join(
                         [
-                            f"{i + 1}. {result.status.value} called function "
-                            f"{result.func_name}:\n"
-                            f"Call objective: {result.call_objective}\n"
-                            f"Function Output: {result.output}"
+                            f"{j + 1}. {result.status.value} called function "
+                            f"{result.func_name}\n"
+                            f"Objective: {result.call_objective}\n"
+                            f"Output:\n{result.output}"
                             for j, result in enumerate(func_call_results)
                         ]
                     )
@@ -218,9 +257,21 @@ class LiteLlmClient(ModelService):
             if (len(messages) + i) % 2 == 1:
                 base_messages.append({"role": "user", "content": base_message_content.strip()})
             else:
-                base_messages.append({"role": "assistant", "content": base_message_content.strip()})
+                base_messages.append(
+                    {"role": "assistant", "content": base_message_content.strip()}
+                )
 
         return base_messages
+
+    @staticmethod
+    def _is_rate_limit_error(error: Exception) -> bool:
+        text = str(error).lower()
+        return (
+            "ratelimiterror" in text
+            or "rate limit" in text
+            or "request rate increased too quickly" in text
+            or "429" in text
+        )
 
     def _parse_model_response(
         self,
