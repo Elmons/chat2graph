@@ -19,6 +19,8 @@ init_server()
 class TestReasoner(Reasoner):
     """Test reasoner"""
 
+    __test__ = False
+
     async def infer(self, task: Task) -> str:
         """Infer by the reasoner."""
         raise NotImplementedError("Infer method not implemented")

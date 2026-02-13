@@ -37,6 +37,8 @@ from app.core.toolkit.tool import Tool
 from app.core.toolkit.tool_config import McpConfig
 from app.core.toolkit.tool_group import ToolGroup
 
+logger = Chat2GraphLogger.get_logger(__name__)
+
 
 class AgenticService(metaclass=Singleton):
     """Agentic service class"""
@@ -165,7 +167,7 @@ class AgenticService(metaclass=Singleton):
         """Configure the AgenticService from yaml file."""
 
         # 1. load configuration and initialize the service
-        print(f"Loading AgenticService from {yaml_path} with encoding {encoding}")
+        logger.debug("Loading AgenticService from %s with encoding %s", yaml_path, encoding)
         agentic_service_config = AgenticConfig.from_yaml(yaml_path, encoding)
         mas = AgenticService(agentic_service_config.app.name)
 
@@ -255,7 +257,7 @@ class AgenticService(metaclass=Singleton):
     @staticmethod
     def _build_leader_workflow(agentic_service_config: AgenticConfig) -> OperatorWrapper:
         """Build the leader agent configuration and return workflow components."""
-        print("Init the Leader agent")
+        logger.debug("Init the Leader agent")
 
         actions_dict: Dict[str, Action] = {}  # cache for all created actions: name -> Action
 
@@ -295,7 +297,7 @@ class AgenticService(metaclass=Singleton):
         agentic_service_config: AgenticConfig,
     ) -> Tuple[Union[OperatorWrapper, Tuple[OperatorWrapper, ...]], ...]:
         """Build a single expert agent configuration and return workflow components."""
-        print(f"  - Configuring expert: {expert_config.profile.name}")
+        logger.debug("Configuring expert: %s", expert_config.profile.name)
 
         actions_dict: Dict[str, Action] = {}  # cache for all created actions: name -> Action
 

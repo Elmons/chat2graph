@@ -60,7 +60,6 @@ def test_memfuse_memory_local_history_only():
     assert operator_mem.get_messages()[0].get_payload() == "world"
 
 
-@pytest.mark.asyncio
 def test_to_openai_messages_truncation():
     """Test _to_openai_messages with truncation."""
     SystemEnv.MEMFUSE_MAX_CONTENT_LENGTH = 10

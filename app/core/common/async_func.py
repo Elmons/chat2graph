@@ -4,6 +4,27 @@ import threading
 from typing import Any
 
 
+def _run_in_new_event_loop(async_func, *args: Any, **kwargs: Any):
+    """Run an async function in a brand-new event loop and clean it up.
+
+    Important: this helper always clears the thread's current event loop after
+    closing to avoid reusing a closed loop in thread pools.
+    """
+    loop = asyncio.new_event_loop()
+    try:
+        asyncio.set_event_loop(loop)
+        return loop.run_until_complete(async_func(*args, **kwargs))
+    finally:
+        try:
+            loop.run_until_complete(loop.shutdown_asyncgens())
+            shutdown_default_executor = getattr(loop, "shutdown_default_executor", None)
+            if shutdown_default_executor is not None:
+                loop.run_until_complete(shutdown_default_executor())
+        finally:
+            asyncio.set_event_loop(None)
+            loop.close()
+
+
 def run_async_function(
     async_func,
     *args: Any,
@@ -28,38 +49,37 @@ def run_async_function(
         Exception: Any exception raised by the async function is re-raised to the caller.
     """
     try:
-        loop = asyncio.get_event_loop()
-        if loop.is_running():
-            # use a thread pool to run the async function, in the case of nested event loops
-            with concurrent.futures.ThreadPoolExecutor(max_workers=1) as executor:
-
-                def run_in_new_loop():
-                    # create a new event loop
-                    new_loop = asyncio.new_event_loop()
-                    asyncio.set_event_loop(new_loop)
-                    try:
-                        return new_loop.run_until_complete(async_func(*args, **kwargs))
-                    finally:
-                        new_loop.close()
-
-                # submit the task to the thread pool and wait for the result
-                future = executor.submit(run_in_new_loop)
-                return future.result()
-        else:
-            # if the loop exists but is not running, use it directly
-            return loop.run_until_complete(async_func(*args, **kwargs))
+        asyncio.get_running_loop()
+        loop_is_running = True
     except RuntimeError:
-        # create a new one, if no event loop is found
-        loop = asyncio.new_event_loop()
-        asyncio.set_event_loop(loop)
-        try:
-            return loop.run_until_complete(async_func(*args, **kwargs))
-        except Exception as e:
-            # re-raise the exception to show the error from run_async_function,
-            # but hide the traceback from this helper function.
-            raise e
-        finally:
-            loop.close()
+        loop_is_running = False
+
+    if loop_is_running:
+        # Use a thread pool to run the async function, in the case of nested event loops.
+        # (asyncio.run() cannot be called when an event loop is already running.)
+        with concurrent.futures.ThreadPoolExecutor(max_workers=1) as executor:
+            future = executor.submit(_run_in_new_event_loop, async_func, *args, **kwargs)
+            return future.result()
+
+    try:
+        loop = asyncio.get_event_loop()
+    except RuntimeError:
+        loop = None
+
+    # If no event loop is set (common in thread pools), or it's closed, run in a fresh one.
+    if loop is None or loop.is_closed():
+        return _run_in_new_event_loop(async_func, *args, **kwargs)
+
+    # If the loop exists and is not running, use it directly.
+    coro = async_func(*args, **kwargs)
+    try:
+        return loop.run_until_complete(coro)
+    except Exception:
+        # If the loop fails before awaiting the coroutine (e.g. loop got closed),
+        # make sure we don't leak an "un-awaited coroutine" warning.
+        if asyncio.iscoroutine(coro):
+            coro.close()
+        raise
 
 
 def run_in_thread(func, *args, **kwargs):

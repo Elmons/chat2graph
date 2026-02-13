@@ -13,12 +13,16 @@ from app.plugin.dbgpt.dbgpt_workflow import DbgptWorkflow
 class TestOperator(Operator):
     """Test operator class."""
 
+    __test__ = False
+
     def __init__(self, id: str):
         self.id = id
 
 
 class TestOperatorWrapper(OperatorWrapper):
     """Test operator wrapper class."""
+
+    __test__ = False
 
     def __init__(self, operator: Operator):
         self._operator = operator

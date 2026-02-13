@@ -23,6 +23,8 @@ init_server()
 class TestAgentOperator(Operator):
     """base test operator for agent integration test"""
 
+    __test__ = False
+
     def __init__(self, id: str):
         self._config = OperatorConfig(id=id, instruction="", actions=[])
 

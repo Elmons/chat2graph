@@ -5,6 +5,7 @@ from typing import Callable, Dict, List, Union
 
 import yaml
 
+from app.core.common.logger import Chat2GraphLogger
 from app.core.common.type import MessageSourceType
 from app.core.common.util import parse_jsons
 from app.core.model.message import ModelMessage
@@ -14,6 +15,8 @@ from app.core.workflow.workflow_generator.mcts_workflow_generator.model import (
     AgenticConfigSection,
     ExecuteResult,
 )
+
+logger = Chat2GraphLogger.get_logger(__name__)
 
 
 def load_agentic_service(optimized_path: str, round_num: int) -> AgenticService:
@@ -50,10 +53,10 @@ def load_config_dict(path: str, skip_section: List[AgenticConfigSection]) -> Dic
 
         return results
     except FileNotFoundError:
-        print(f"Not found file: {path}")
+        logger.warning("Not found file: %s", path)
         return {}
-    except Exception as e:
-        print(f"Error while reading file: {e}")
+    except Exception:
+        logger.exception("Error while reading file: %s", path)
         return {}
 
 
@@ -126,6 +129,7 @@ async def generate_json(
     times = 0
     while times < max_retry:
         times += 1
+        resp_str = ""
         try:
             response = await model.generate(sys_prompt=sys_prompt, messages=messages)
             resp_str = response.get_payload()
@@ -141,7 +145,8 @@ async def generate_json(
                 valid_strs = [resp_str]
             return filter(valid_strs)
         except Exception as e:
-            print(f"[generate_json] failed, reason={e}, str = {resp_str}, times={times}")
+            logger.warning("[generate_json] failed (times=%s): %s", times, e)
+            logger.debug("[generate_json] raw response: %s", resp_str)
             messages.append(
                 ModelMessage(
                     payload=resp_str,
