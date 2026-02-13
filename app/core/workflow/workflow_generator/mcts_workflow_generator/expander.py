@@ -100,6 +100,38 @@ class LLMExpander(Expander):
 
         return context_str
 
+    @staticmethod
+    def _resolve_optimization_mode(score: float) -> tuple[str, int, str]:
+        """Switch mutation amplitude by current score.
+
+        - aggressive: low score, allow larger topology/instruction changes.
+        - conservative: high score, prioritize local modifications for stability.
+        """
+        if score < 1.5:
+            return (
+                "aggressive",
+                4,
+                "Current score is low. You may make broader changes including adding operators "
+                "or rewriting workflows if needed.",
+            )
+        return (
+            "conservative",
+            2,
+            "Current score is already decent. Prefer minimal, local edits; avoid broad rewrites.",
+        )
+
+    @staticmethod
+    def _apply_action_budget(
+        actions: List[OptimizeAction], *, mode: str, max_actions: int
+    ) -> List[OptimizeAction]:
+        if not actions:
+            return []
+        if mode == "conservative":
+            modified_first = [a for a in actions if a.action_type.value == "modify"]
+            selected = modified_first if modified_first else actions
+            return selected[:max_actions]
+        return actions[:max_actions]
+
     async def _get_optimize_actions(
         self,
         task_desc: str,
@@ -107,6 +139,9 @@ class LLMExpander(Expander):
         current_operators: str,
         current_experts: str,
         round_context: WorkflowLogFormat,
+        optimization_mode: str,
+        change_budget: str,
+        max_actions: int,
     ) -> List[OptimizeAction]:
         """Ask the LLM for high-level optimization actions based on actions, operators and experts."""  # noqa: E501
         
@@ -133,6 +168,9 @@ class LLMExpander(Expander):
         prompt = get_actions_prompt_template.format(
             context=context,
             available_actions=build_action_constraints(current_actions),
+            optimization_mode=optimization_mode,
+            change_budget=change_budget,
+            max_actions=max_actions,
         )
 
         # filter function to validate LLM output.
@@ -178,6 +216,8 @@ class LLMExpander(Expander):
         round_context: WorkflowLogFormat,
         optimize_acitons: List[OptimizeAction],
         extra_messages: List[ModelMessage],
+        optimization_mode: str,
+        change_budget: str,
     ) -> OptimizeResp:
         """use LLM to optimize operator definitions guided by selected actions based on current actions"""  # noqa: E501
 
@@ -209,6 +249,8 @@ class LLMExpander(Expander):
             context=context,
             optimize_actions=optimize_acitons,
             available_actions=build_action_constraints(actions),
+            optimization_mode=optimization_mode,
+            change_budget=change_budget,
         )
 
         # filter function to validate LLM output.
@@ -286,6 +328,8 @@ class LLMExpander(Expander):
         round_context: WorkflowLogFormat,
         optimize_acitons: List[OptimizeAction],
         extra_messages: List[ModelMessage],
+        optimization_mode: str,
+        change_budget: str,
     ) -> OptimizeResp:
         """using LLM to optimize expert definitions by selected actions based on current operators"""  # noqa: E501
         
@@ -319,6 +363,8 @@ class LLMExpander(Expander):
             context=context,
             optimize_actions=optimize_acitons,
             main_expert_name=self.main_expert_name,
+            optimization_mode=optimization_mode,
+            change_budget=change_budget,
         )
         
         # filter function to validate LLM output.
@@ -469,8 +515,12 @@ class LLMExpander(Expander):
         if current_actions is None or current_ops is None or current_experts is None:
             raise Exception(
                 f"[LLMExpander][expand] Cann't not find actions\
-                    or operators or experts in current_config={current_config}" # noqa: 501
+                    or operators or experts in current_config={current_config}"  # noqa: E501
             )
+
+        optimization_mode, max_actions, change_budget = self._resolve_optimization_mode(
+            round_context.score
+        )
 
         # get optimize suggested actions from LLM
         retry_count = 0
@@ -483,6 +533,9 @@ class LLMExpander(Expander):
                     current_operators=current_ops,
                     current_experts=current_experts,
                     round_context=round_context,
+                    optimization_mode=optimization_mode,
+                    change_budget=change_budget,
+                    max_actions=max_actions,
                 )
                 if len(optimize_actions) != 0:
                     break
@@ -491,6 +544,9 @@ class LLMExpander(Expander):
 
         if len(optimize_actions) == 0:
             raise Exception("[expand] failed while get optimize actions")
+        optimize_actions = self._apply_action_budget(
+            optimize_actions, mode=optimization_mode, max_actions=max_actions
+        )
 
         # extract operator and expert related actions
         operator_optimize_actions = [
@@ -520,6 +576,8 @@ class LLMExpander(Expander):
                     round_context=round_context,
                     optimize_acitons=operator_optimize_actions,
                     extra_messages=extra_messages,
+                    optimization_mode=optimization_mode,
+                    change_budget=change_budget,
                 )
                 new_ops = operator_optimize_result.new_configs.get(
                     AgenticConfigSection.OPERATORS.value
@@ -552,6 +610,8 @@ class LLMExpander(Expander):
                     round_context=round_context,
                     optimize_acitons=expert_optimize_actions,
                     extra_messages=extra_messages,
+                    optimization_mode=optimization_mode,
+                    change_budget=change_budget,
                 )
 
                 # store optimization results

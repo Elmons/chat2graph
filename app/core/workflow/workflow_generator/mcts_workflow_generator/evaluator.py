@@ -51,6 +51,10 @@ class LLMEvaluator(Evaluator):
         self.need_reflect = need_reflect
         self.main_expert_name = main_expert_name
         self._scoring_batch_size = max(1, int(SystemEnv.LLM_SCORING_BATCH_SIZE))
+        self._regression_penalty_weight = max(
+            0.0, float(SystemEnv.MCTS_REGRESSION_PENALTY_WEIGHT)
+        )
+        self._error_penalty_weight = max(0.0, float(SystemEnv.MCTS_ERROR_PENALTY_WEIGHT))
 
     async def evaluate_workflow(
         self,
@@ -200,10 +204,12 @@ class LLMEvaluator(Evaluator):
         with open(results_file, "w", encoding="utf-8") as f:
             json.dump([result.model_dump() for result in results], f, ensure_ascii=False, indent=2)
 
+        objective_score = self._compose_objective_score(avg_score=avg_score, results=results)
+
         # Generate reflection if needed
         if self.need_reflect:
             reflect_result = await self._reflect(
-                modifications=modifications, results=results, avg_score=avg_score
+                modifications=modifications, results=results, avg_score=objective_score
             )
         else:
             reflect_result = ReflectResult(
@@ -211,7 +217,7 @@ class LLMEvaluator(Evaluator):
                 optimize_suggestion=[]
             )
 
-        return avg_score, reflect_result.model_dump_json(indent=2)
+        return objective_score, reflect_result.model_dump_json(indent=2)
 
     async def _pack_infer_trace(
         self, modifications: List[str], results: List[Dict[str, str]], avg_score: float
@@ -224,6 +230,7 @@ class LLMEvaluator(Evaluator):
     ) -> ReflectResult:
         """Ask the LLM to reflect on the current optimisation step."""
         prompt = reflect_prompt_template.format(
+            avg_score=avg_score,
             modification=modifications,
             results=json.dumps(
                 [result.model_dump() for result in results], ensure_ascii=False, indent=2
@@ -259,6 +266,36 @@ class LLMEvaluator(Evaluator):
             filter=filter,
         )
         return ReflectResult.model_validate(resp)
+
+    def _compose_objective_score(self, *, avg_score: float, results: List[ExecuteResult]) -> float:
+        """Compute MCTS objective score with stability penalties.
+
+        objective = avg_score - w_reg * regression_rate - w_err * execution_error_rate
+        """
+        if not results:
+            return avg_score
+
+        regression_count = 0
+        valid_parent_count = 0
+        error_count = 0
+        for result in results:
+            if result.error:
+                error_count += 1
+            if result.ori_score >= 0:
+                valid_parent_count += 1
+                if result.score < result.ori_score:
+                    regression_count += 1
+
+        regression_rate = (
+            regression_count / valid_parent_count if valid_parent_count > 0 else 0.0
+        )
+        error_rate = error_count / max(len(results), 1)
+
+        return (
+            avg_score
+            - self._regression_penalty_weight * regression_rate
+            - self._error_penalty_weight * error_rate
+        )
 
     async def _llm_scoring(self, question: str, model_output: str, expected_answer: str) -> int:
         """Score a single workflow execution result via an LLM rubric."""

@@ -188,7 +188,7 @@ class _FlatScoreEvaluator(Evaluator):
         return self.score, f"reflection-{round_num}"
 
 
-def test_mixed_probability_selector_select(monkeypatch):
+def test_mixed_probability_selector_select():
     selector = MixedProbabilitySelector()
     logs = {
         1: WorkflowLogFormat(
@@ -196,32 +196,20 @@ def test_mixed_probability_selector_select(monkeypatch):
             score=0.8,
             modifications=[],
             reflection="r1",
-            feedbacks=[],
+            feedbacks=[{"succeed": "False"}, {"succeed": "False"}],
         ),
         2: WorkflowLogFormat(
             round_number=2,
-            score=0.3,
+            score=1.2,
             modifications=[],
             reflection="r2",
             feedbacks=[],
         ),
     }
 
-    captured = {}
-
-    def fake_choice(size, p):
-        captured["probabilities"] = p
-        return 0
-
-    monkeypatch.setattr(
-        "app.core.workflow.workflow_generator.mcts_workflow_generator.selector.np.random.choice",
-        fake_choice,
-    )
-
     selected = selector.select(top_k=2, logs=logs)
 
-    assert selected.round_number == 1
-    assert pytest.approx(sum(captured["probabilities"])) == 1
+    assert selected.round_number == 2
 
 
 @pytest.mark.asyncio

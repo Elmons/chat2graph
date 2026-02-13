@@ -24,6 +24,8 @@ _env_vars: Dict[str, Tuple[Type, Any]] = {
     "LLM_RETRY_BACKOFF_BASE_SECONDS": (float, 1.0),
     "LLM_RETRY_BACKOFF_MAX_SECONDS": (float, 15.0),
     "LLM_SCORING_BATCH_SIZE": (int, 10),
+    "MCTS_REGRESSION_PENALTY_WEIGHT": (float, 0.8),
+    "MCTS_ERROR_PENALTY_WEIGHT": (float, 0.4),
     "LLM_USE_OPENAI_BATCH_FILE": (bool, False),
     "LLM_BATCH_FILE_ENDPOINT": (str, "/v1/chat/completions"),
     "LLM_BATCH_FILE_COMPLETION_WINDOW": (str, "24h"),
