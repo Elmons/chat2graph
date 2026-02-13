@@ -6,7 +6,9 @@ import matplotlib.pyplot as plt
 import networkx as nx  # type: ignore
 
 from app.core.common.async_func import run_async_function
+from app.core.common.logger import Chat2GraphLogger
 from app.core.common.singleton import Singleton
+from app.core.common.system_env import SystemEnv
 from app.core.toolkit.action import Action
 from app.core.toolkit.tool import Tool
 from app.core.toolkit.tool_group import ToolGroup
@@ -21,6 +23,7 @@ class ToolkitService(metaclass=Singleton):
 
     def __init__(self):
         self._toolkit: Toolkit = Toolkit()
+        self._logger = Chat2GraphLogger.get_logger(__name__)
 
     def get_toolkit(self) -> Toolkit:
         """Get the current toolkit."""
@@ -215,7 +218,11 @@ class ToolkitService(metaclass=Singleton):
         for u, v in toolkit_subgraph.edges():
             if toolkit_subgraph.get_score(u, v) < threshold:
                 toolkit_subgraph.remove_edge(u, v)
-        self.visualize(graph=toolkit_subgraph, title="Recommended Toolkit")
+        if SystemEnv.PRINT_TOOLKIT_GRAPH:
+            try:
+                self.visualize(graph=toolkit_subgraph, title="Recommended Toolkit")
+            except Exception as e:
+                self._logger.warning("Skip toolkit visualization due to error: %s", e)
 
         return toolkit_subgraph
 

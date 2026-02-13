@@ -1,7 +1,7 @@
 from abc import abstractmethod
 import json
 from pathlib import Path
-from typing import Dict, List, Literal, Tuple
+from typing import Dict, List, Literal, Optional, Tuple
 
 from app.core.common.system_env import SystemEnv
 from app.core.common.type import MessageSourceType
@@ -39,7 +39,7 @@ class Evaluator:
 class LLMEvaluator(Evaluator):
     """Leverage LLMs to score workflow executions and reflect on outcomes."""
 
-    def __init__(self, need_reflect: bool = True, main_expert_name: str = "Main Expert"):
+    def __init__(self, need_reflect: bool = True, main_expert_name: Optional[str] = None):
         """Initialise the evaluator with a backing model service."""
         super().__init__()
         self._llm: ModelService = ModelServiceFactory.create(

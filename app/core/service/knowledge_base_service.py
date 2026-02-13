@@ -4,6 +4,7 @@ from typing import List, Optional, Tuple
 
 from sqlalchemy import func
 
+from app.core.common.logger import Chat2GraphLogger
 from app.core.common.singleton import Singleton
 from app.core.common.system_env import SystemEnv
 from app.core.common.type import (
@@ -29,6 +30,7 @@ class KnowledgeBaseService(metaclass=Singleton):
     """Knowledge Base Service"""
 
     def __init__(self):
+        self._logger = Chat2GraphLogger.get_logger(__name__)
         self._knowledge_base_dao: KnowledgeBaseDao = KnowledgeBaseDao.instance
         self._file_descriptor_dao: FileDescriptorDao = FileDescriptorDao.instance
         self._file_kb_mapping_dao: FileKbMappingDao = FileKbMappingDao.instance
@@ -234,9 +236,13 @@ class KnowledgeBaseService(metaclass=Singleton):
     def get_knowledge(self, query: str, session_id: Optional[str]) -> Knowledge:
         """Get knowledge by ID."""
         # get global knowledge
-        global_chunks = KnowledgeStoreFactory.get_or_create(str(self._global_kb_do.id)).retrieve(
-            query
-        )
+        try:
+            global_chunks = KnowledgeStoreFactory.get_or_create(str(self._global_kb_do.id)).retrieve(
+                query
+            )
+        except Exception as e:
+            self._logger.warning("Global knowledge retrieve failed, fallback to empty: %s", e)
+            global_chunks = []
         # get local knowledge
         local_chunks = []
         if session_id:
@@ -244,9 +250,14 @@ class KnowledgeBaseService(metaclass=Singleton):
             if len(kbs) == 1:
                 kb = kbs[0]
                 knowledge_base_id = kb.id
-                local_chunks = KnowledgeStoreFactory.get_or_create(str(knowledge_base_id)).retrieve(
-                    query
-                )
+                try:
+                    local_chunks = KnowledgeStoreFactory.get_or_create(
+                        str(knowledge_base_id)
+                    ).retrieve(query)
+                except Exception as e:
+                    self._logger.warning(
+                        "Local knowledge retrieve failed, fallback to empty: %s", e
+                    )
         return Knowledge(global_chunks, local_chunks)
 
     def load_knowledge(
