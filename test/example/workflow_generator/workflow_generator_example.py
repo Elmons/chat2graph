@@ -25,8 +25,9 @@ DEFAULT_DATASET_PATH = (
     "20260213_144328_query_small_100/dataset.json"
 )
 MAX_ROUNDS = int(os.getenv("WF_MAX_ROUNDS", "2"))
-DATASET_LIMIT = int(os.getenv("WF_DATASET_LIMIT", "5"))
+DATASET_LIMIT = int(os.getenv("WF_DATASET_LIMIT", "10"))
 DATASET_PATH = os.getenv("WF_DATASET_PATH", DEFAULT_DATASET_PATH)
+TOP_K = int(os.getenv("WF_TOP_K", "3"))
 NO_IMPROVEMENT_PATIENCE = int(os.getenv("WF_NO_IMPROVEMENT_PATIENCE", "0"))
 RESUME = os.getenv("WF_RESUME", "0").lower() in {"1", "true", "yes"}
 RESUME_RUN_PATH = os.getenv("WF_RESUME_RUN_PATH")
@@ -73,7 +74,7 @@ async def test():
         evaluator=evaluator,
         max_rounds=MAX_ROUNDS,
         optimized_path=Path(__file__).resolve().parent / "workflow_space",
-        top_k=5,
+        top_k=max(1, TOP_K),
         max_retries=5,
         no_improvement_patience=NO_IMPROVEMENT_PATIENCE,
         resume=RESUME,

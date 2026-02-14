@@ -21,10 +21,15 @@ from app.core.workflow.workflow_generator.mcts_workflow_generator.evaluator impo
 from app.core.workflow.workflow_generator.mcts_workflow_generator.expander import Expander
 from app.core.workflow.workflow_generator.mcts_workflow_generator.model import (
     AgenticConfigSection,
+    ExecuteResult,
+    ReflectResult,
     WorkflowLogFormat,
 )
 from app.core.workflow.workflow_generator.mcts_workflow_generator.selector import Selector
-from app.core.workflow.workflow_generator.mcts_workflow_generator.utils import load_config_dict
+from app.core.workflow.workflow_generator.mcts_workflow_generator.utils import (
+    load_config_dict,
+    load_execute_result,
+)
 from app.core.workflow.workflow_generator.mcts_workflow_generator.validator import (
     infer_single_expert_name,
     validate_candidate_config,
@@ -207,6 +212,116 @@ class MCTSWorkflowGenerator(WorkflowGenerator):
                 },
             },
         )
+
+    @staticmethod
+    def _validation_failure_suggestions(validation_errors: List[str]) -> List[str]:
+        """Generate actionable suggestions from workflow validation errors."""
+        suggestions: List[str] = []
+        for err in validation_errors:
+            low = str(err).lower()
+            if "exactly 1 tail operator" in low:
+                suggestions.append(
+                    "Merge terminal branches so the expert.workflow ends with exactly one tail operator."
+                )
+            elif "cycle detected" in low:
+                suggestions.append(
+                    "Remove cyclic dependencies and keep expert.workflow as a DAG."
+                )
+            elif "operator not present" in low:
+                suggestions.append(
+                    "Ensure every operator referenced in expert.workflow exists in top-level operators."
+                )
+            else:
+                suggestions.append(
+                    "Fix workflow structural validation errors before running evaluation."
+                )
+        # Keep insertion order while removing duplicates.
+        return list(dict.fromkeys(suggestions))
+
+    def _load_parent_scores(self, parent_round: int) -> Dict[str, float]:
+        """Load parent-round per-task scores for regression context."""
+        if parent_round <= 0:
+            return {}
+        parent_results_file = Path(self.optimized_path) / f"round{parent_round}" / "results.json"
+        if not parent_results_file.exists():
+            return {}
+        try:
+            parent_results = load_execute_result(parent_results_file)
+            return {result.task: result.score for result in parent_results}
+        except Exception:
+            return {}
+
+    def _record_validation_failure_round(
+        self,
+        *,
+        round_num: int,
+        parent_round: int,
+        dataset: List[Row],
+        validation_errors: List[str],
+        modifications: List[str],
+        optimize_suggestions: List,
+    ) -> None:
+        """Persist synthetic evaluation artifacts when candidate validation fails."""
+        parent_scores = self._load_parent_scores(parent_round)
+        error_msg = (
+            "candidate workflow.yml failed validation, "
+            f"errors={validation_errors}"
+        )
+        results: List[ExecuteResult] = []
+        for data in dataset:
+            parent_score = parent_scores.get(data.task, -1)
+            results.append(
+                ExecuteResult(
+                    task=data.task,
+                    verifier=data.verifier,
+                    model_output="",
+                    ori_score=parent_score,
+                    score=-1,
+                    error=error_msg,
+                    succeed="no",
+                    latency_ms=None,
+                    token_usage=None,
+                    error_type="validation_error",
+                )
+            )
+
+        self.artifact_writer.write_round_json(
+            round_num=round_num,
+            filename="results.json",
+            payload=[result.model_dump() for result in results],
+        )
+
+        valid_parent_count = 0
+        regression_count = 0
+        for result in results:
+            if result.ori_score >= 0:
+                valid_parent_count += 1
+                if result.score < result.ori_score:
+                    regression_count += 1
+        regression_rate = (
+            regression_count / valid_parent_count if valid_parent_count > 0 else 0.0
+        )
+        error_rate = 1.0 if results else 0.0
+        raw_avg_score = -1.0 if results else 0.0
+
+        reflect_result = ReflectResult(
+            failed_reason=[f"validation_failed: {err}" for err in validation_errors],
+            optimize_suggestion=self._validation_failure_suggestions(validation_errors),
+        )
+        self.logs[round_num] = WorkflowLogFormat(
+            round_number=round_num,
+            parent_round=parent_round,
+            score=raw_avg_score,
+            raw_avg_score=raw_avg_score,
+            regression_rate=regression_rate,
+            error_rate=error_rate,
+            reflection=reflect_result.model_dump_json(indent=2),
+            modifications=modifications,
+            feedbacks=[],
+            optimize_suggestions=optimize_suggestions,
+        )
+        self.update_parent_feedbacks(parent_round, round_num)
+        self.log_save()
 
     def _record_no_improvement(
         self,
@@ -437,6 +552,14 @@ class MCTSWorkflowGenerator(WorkflowGenerator):
                     "round=%s, errors=%s",
                     round_num,
                     validation.errors,
+                )
+                self._record_validation_failure_round(
+                    round_num=round_num,
+                    parent_round=select_round.round_number,
+                    dataset=train_data,
+                    validation_errors=validation.errors,
+                    modifications=optimize_resp.modifications,
+                    optimize_suggestions=optimize_suggestions,
                 )
                 no_improvement_rounds, should_stop = self._record_no_improvement(
                     round_num=round_num,

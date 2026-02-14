@@ -484,6 +484,78 @@ async def test_mcts_generator_early_stop_on_no_improvement(monkeypatch, tmp_path
 
 
 @pytest.mark.asyncio
+async def test_mcts_generator_validation_failure_persists_results_and_reflection(monkeypatch, tmp_path):
+    dataset = _make_dataset()
+    base_path = Path(__file__).resolve().parents[3]
+    init_template = (
+        base_path
+        / "app"
+        / "core"
+        / "workflow"
+        / "workflow_generator"
+        / "mcts_workflow_generator"
+        / "init_template"
+        / "basic_template.yml"
+    )
+
+    monkeypatch.setattr(
+        "app.core.workflow.workflow_generator.mcts_workflow_generator.generator.time.time",
+        lambda: 1_700_000_040,
+    )
+
+    def _validate_with_round_check(yaml_path, *args, **kwargs):
+        yaml_path = str(yaml_path)
+        if "round1/workflow.yml" in yaml_path:
+            return SimpleNamespace(ok=True, errors=[])
+        return SimpleNamespace(
+            ok=False, errors=["workflow must have exactly 1 tail operator, got 2"]
+        )
+
+    monkeypatch.setattr(
+        "app.core.workflow.workflow_generator.mcts_workflow_generator.generator.validate_candidate_config",
+        _validate_with_round_check,
+    )
+
+    stub_evaluator = _StubEvaluator()
+    generator = MCTSWorkflowGenerator(
+        db=None,
+        dataset=dataset,
+        selector=_StubSelector(),
+        expander=_StubExpander(),
+        evaluator=stub_evaluator,
+        optimize_grain=[AgenticConfigSection.OPERATORS, AgenticConfigSection.EXPERTS],
+        init_template_path=str(init_template),
+        max_rounds=2,
+        optimized_path=str(tmp_path),
+        top_k=2,
+        max_retries=1,
+    )
+
+    max_score, optimal_round = await generator._generate_rounds()
+
+    assert max_score == 0.0
+    assert optimal_round == 1
+    assert stub_evaluator.calls == []
+    assert 2 in generator.logs
+    assert generator.logs[2].score == -1.0
+    reflection = json.loads(generator.logs[2].reflection)
+    assert any("validation_failed" in reason for reason in reflection["failed_reason"])
+    assert any(
+        "exactly one tail operator" in item.lower()
+        for item in reflection["optimize_suggestion"]
+    )
+
+    assert len(generator.logs[1].feedbacks) == 1
+    assert generator.logs[1].feedbacks[0]["child_round"] == "2"
+
+    results_file = Path(generator.optimized_path) / "round2" / "results.json"
+    assert results_file.exists()
+    rows = json.loads(results_file.read_text(encoding="utf-8"))
+    assert len(rows) == len(dataset.data)
+    assert all(row["error_type"] == "validation_error" for row in rows)
+
+
+@pytest.mark.asyncio
 async def test_mcts_generator_resume_from_existing_logs(monkeypatch, tmp_path):
     dataset = _make_dataset()
     base_path = Path(__file__).resolve().parents[3]
