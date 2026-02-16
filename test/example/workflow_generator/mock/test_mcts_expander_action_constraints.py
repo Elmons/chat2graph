@@ -39,6 +39,9 @@ actions:
         current_operators="operators: []",
         current_experts="experts: []",
         round_context=context,
+        optimization_mode="conservative",
+        change_budget="local-only",
+        max_actions=2,
     )
 
     assert result

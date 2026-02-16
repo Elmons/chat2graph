@@ -1,4 +1,6 @@
 import json
+import math
+import re
 from typing import Dict, List
 
 from app.core.workflow.dataset_synthesis.model import (
@@ -9,370 +11,493 @@ from app.core.workflow.dataset_synthesis.model import (
     SubTaskType,
 )
 
+# SamplingIntentV2 (query-only): canonical core intents used by sampling/QA/evaluation.
+SAMPLING_CORE_INTENTS_V2: tuple[str, ...] = (
+    "query.lookup",
+    "query.neighbor",
+    "query.filter.single",
+    "query.filter.combined",
+    "query.reasoning.single_step",
+    "query.reasoning.chain",
+    "query.path.reachability",
+    "query.path.shortest",
+    "query.aggregation.count",
+    "query.aggregation.group_count",
+    "query.ranking.topk",
+    "query.topology.degree",
+    "query.path.constrained",
+    "query.cycle.exists",
+    "query.motif.triangle_count",
+    "query.similarity.shared_neighbors",
+)
+
+# Constraint tags are not sampled directly; they are used by QA gates and template routing.
+SAMPLING_CONSTRAINT_TAGS_V2: tuple[str, ...] = (
+    "requires_hop_bound",
+    "requires_order_limit",
+    "requires_group_by",
+    "forbid_unbounded_enumeration",
+    "global_answer_required",
+)
+
+
+def _q(
+    *,
+    level: TASK_LEVEL,
+    subtype_id: str,
+    name: str,
+    desc: str,
+    examples: list[str],
+    canonical_intents: list[str],
+    constraint_tags: list[str],
+    required_query_features: list[str],
+    forbidden_patterns: list[str],
+    target_ratio_min: float,
+    target_ratio_max: float,
+) -> SubTaskType:
+    return SubTaskType(
+        level=level,
+        subtype_id=subtype_id,
+        name=name,
+        desc=desc,
+        examples=examples,
+        canonical_intents=canonical_intents,
+        constraint_tags=constraint_tags,
+        required_query_features=required_query_features,
+        forbidden_patterns=forbidden_patterns,
+        target_ratio_min=target_ratio_min,
+        target_ratio_max=target_ratio_max,
+    )
+
 
 class QueryTaskSubtypes:
-    """Registry of graph query task subtypes organized by difficulty levels.
+    """QueryTaxonomy v2 for dataset synthesis (query-only).
 
-    This class defines collections of SubTaskType objects grouped into levels
-    (L1..L4). Each subtask entry includes a level, name, description and
-    example queries. The registry is used by the dataset synthesis pipeline to:
-
-      - provide human-readable task descriptions for LLM prompt construction,
-      - supply structured subtask metadata for categorization and validation,
-      - offer a centralized list (REGISTER_LIST) of supported difficulty levels.
-
-    Usage:
-      - Refer to QueryTaskSubtypes.L1 / L2 / L3 / L4 for level-specific subtasks.
-      - Iterate QueryTaskSubtypes.REGISTER_LIST when assembling prompts or
-        initializing task-type statistics in the generator.
+    The taxonomy exposes stable `subtype_id` and keeps human-readable display names
+    for prompts. Sampling, counting and QA alignment should use `subtype_id`.
     """
-    
-    # L1: Simple Query Tasks
+
     l1_tasks = [
-        SubTaskType(
+        _q(
             level="L1",
+            subtype_id="q_l1_attr_lookup",
             name="Entity Attribute and Label Query",
             desc=(
-                "Core logic: Retrieve direct attributes (e.g., employee's department, "
-                "product's production date) or node type labels of a single entity "
-                "from the global database. The operation scope is 0-hop, focusing "
-                "only on direct information of a single entity."
+                "Retrieve direct attributes/labels for one entity (0-hop lookup) from "
+                "the global graph."
             ),
-            examples=[
-                "What is the department of employee Zhang San?",
-            ],
+            examples=["What is the department of employee Zhang San?"],
+            canonical_intents=["query.lookup"],
+            constraint_tags=["forbid_unbounded_enumeration", "global_answer_required"],
+            required_query_features=["match", "return"],
+            forbidden_patterns=["order by", "shortestpath(", " group by "],
+            target_ratio_min=0.06,
+            target_ratio_max=0.22,
         ),
-        SubTaskType(
+        _q(
             level="L1",
+            subtype_id="q_l1_neighbor_query",
             name="Direct Relationship and Neighbor Query",
             desc=(
-                "Core logic: Determine the 1-hop direct relationship (e.g., cooperation, "
-                "supply) between two entities from the global database, or retrieve all "
-                "1-hop direct neighbors (e.g., team members, associated orders) of a "
-                "single entity. The operation scope is 1-hop."
+                "Check direct relationship existence or list bounded one-hop neighbors "
+                "for a given entity."
             ),
             examples=[
-                "Is there a 'cooperation' relationship between Company A and Company B?",
-                "Who are the direct team members of team leader Wang Wu?",
+                "Is there a cooperation relationship between Company A and Company B?"
             ],
+            canonical_intents=["query.neighbor"],
+            constraint_tags=["forbid_unbounded_enumeration", "global_answer_required"],
+            required_query_features=["match", "return"],
+            forbidden_patterns=["shortestpath("],
+            target_ratio_min=0.06,
+            target_ratio_max=0.20,
         ),
-        SubTaskType(
+        _q(
             level="L1",
+            subtype_id="q_l1_filter_single",
             name="Simple Attribute Filtering",
             desc=(
-                "Core logic: Filter nodes associated with a specified entity and meeting a "
-                "single attribute condition (e.g., employee's tenure, product's inventory "
-                "quantity) from the global database. The operation is based on 1-hop "
-                "associations and single-condition filtering."
+                "Filter entities by one explicit predicate on attributes or labels."
             ),
-            examples=[
-                "Which products are in the same category as Product D and have an inventory > 100?"
-            ],
+            examples=["Which products have inventory > 100?"],
+            canonical_intents=["query.filter.single"],
+            constraint_tags=["forbid_unbounded_enumeration", "global_answer_required"],
+            required_query_features=["where"],
+            forbidden_patterns=[" group by ", "shortestpath("],
+            target_ratio_min=0.06,
+            target_ratio_max=0.20,
         ),
-        SubTaskType(
+        _q(
             level="L1",
+            subtype_id="q_l1_reasoning_single_step",
             name="Single-Step Intuitive Reasoning Query",
             desc=(
-                "Core logic: Derive results (e.g., an employee's direct supervisor, a "
-                "product's storage warehouse) based on the 1-hop direct relationship of "
-                "a single entity from the global database. The reasoning chain has only "
-                "one step and does not require cross-multi-entity association."
+                "Infer one-step conclusions from direct relationships (single-hop reasoning)."
             ),
-            examples=[
-                "Who is the direct supervisor of employee Chen Qi?",
-                "Which warehouse is Product D directly stored in?",
-            ],
+            examples=["Who is the direct supervisor of employee Chen Qi?"],
+            canonical_intents=["query.reasoning.single_step"],
+            constraint_tags=["forbid_unbounded_enumeration", "global_answer_required"],
+            required_query_features=["match", "return"],
+            forbidden_patterns=["shortestpath(", " group by "],
+            target_ratio_min=0.05,
+            target_ratio_max=0.18,
         ),
     ]
 
-    #  L2: Complex Query Tasks (Multi-Node/Multi-Edge/Multi-Step Reasoning, No Algorithms) 
     l2_tasks = [
-        SubTaskType(
+        _q(
             level="L2",
-            name="Multi-Hop Relationship and Path Query",
+            subtype_id="q_l2_path_reachability",
+            name="Multi-Hop Relationship and Reachability Query",
             desc=(
-                "Core logic: Query 2-hop and above association relationships (e.g., a "
-                "friend's friend, a supplier's supplier) between two entities from the "
-                "global database, or determine the reachability of multi-hop paths. The "
-                "operation scope is ≥2 hops and requires cross-multi-entity association."
+                "Reason over bounded multi-hop paths (>=2 hops) to determine reachability "
+                "or retrieve constrained path evidence."
             ),
-            examples=[
-                "Who are the friends of User A's friends?",
-                (
-                    "Can Supplier X be associated with Customer Y through the "
-                    "'Supplier → Manufacturer → Customer' path?"
-                ),
+            examples=["Can Supplier X reach Customer Y within 3 hops?"],
+            canonical_intents=["query.path.reachability", "query.reasoning.chain"],
+            constraint_tags=[
+                "requires_hop_bound",
+                "forbid_unbounded_enumeration",
+                "global_answer_required",
             ],
+            required_query_features=["*..n", "match"],
+            forbidden_patterns=["[*]-", "shortestpath((a)-[*]-(b))"],
+            target_ratio_min=0.08,
+            target_ratio_max=0.22,
         ),
-        SubTaskType(
+        _q(
             level="L2",
+            subtype_id="q_l2_filter_combined",
             name="Pattern-Based and Combined Filtering Query",
             desc=(
-                "Core logic: Match small graph structure patterns of 'core entity → "
-                "associated entity' from the global database, or filter associated nodes "
-                "by combining multiple attribute conditions (e.g., region + employment "
-                "time, production year + inventory). It requires integrating multiple "
-                "conditions and multi-entity associations."
+                "Combine multiple predicates/pattern constraints across entities."
             ),
             examples=[
-                (
-                    "Which R&D projects are managed by employees who work in the Beijing "
-                    "Branch and have been employed for more than 2 years?"
-                ),
+                "Which projects are managed by employees in Beijing and tenure > 2 years?"
             ],
+            canonical_intents=["query.filter.combined"],
+            constraint_tags=["forbid_unbounded_enumeration", "global_answer_required"],
+            required_query_features=["where", "and/or"],
+            forbidden_patterns=["shortestpath("],
+            target_ratio_min=0.07,
+            target_ratio_max=0.20,
         ),
-        #  TODO: resolve information loss when proposing local aggregations from sampled subgraphs
-        # SubTaskType(
-        #     level="L2",
-        #     name="Small-Scale Aggregation Query",
-        #     desc=(
-        #         "Core logic: Perform simple aggregation calculations (e.g., quantity "
-        #         "statistics, average calculation) on N-hop (N≥1) associated nodes of a "
-        #         "specified entity from the global database. The aggregation scope focuses "
-        #         "on the associated network of the entity, and no algorithm support is "
-        #         "required."
-        #     ),
-        #     examples=[
-        #         "What is the total number of friends within 2 hops of User I?",
-        #         (
-        #             "What is the average monthly sales volume of the downstream "
-        #             "distributors of Product J?"
-        #         )
-        #     ]
-        # ),
-        SubTaskType(
+        _q(
             level="L2",
+            subtype_id="q_l2_reasoning_chain",
             name="Multi-Step Chain Reasoning Query",
             desc=(
-                "Core logic: Perform chain reasoning (e.g., an employee's supervisor's "
-                "supervisor, a product supplier's partner manufacturer) along the multi-hop "
-                "relationships (≥2 hops) of entities from the global database. The "
-                "reasoning chain needs to cross multiple entities and does not require "
-                "algorithm assistance."
+                "Follow bounded chain relationships across multiple entities."
             ),
-            examples=[
-                "Who is the supervisor of Employee M's supervisor?",
-                "Which manufacturer is the partner of Product N's supplier?",
+            examples=["Who is the supervisor of employee M's supervisor?"],
+            canonical_intents=["query.reasoning.chain"],
+            constraint_tags=[
+                "requires_hop_bound",
+                "forbid_unbounded_enumeration",
+                "global_answer_required",
             ],
+            required_query_features=["match", "where"],
+            forbidden_patterns=["[*]-"],
+            target_ratio_min=0.06,
+            target_ratio_max=0.18,
+        ),
+        _q(
+            level="L2",
+            subtype_id="q_l2_aggregation_count",
+            name="Scoped Aggregation Count Query",
+            desc=(
+                "Compute bounded count aggregations for explicitly scoped entity sets."
+            ),
+            examples=["How many transfers are initiated by Alice?"],
+            canonical_intents=["query.aggregation.count"],
+            constraint_tags=["forbid_unbounded_enumeration", "global_answer_required"],
+            required_query_features=["count("],
+            forbidden_patterns=["shortestpath("],
+            target_ratio_min=0.05,
+            target_ratio_max=0.16,
+        ),
+        _q(
+            level="L2",
+            subtype_id="q_l2_aggregation_group_count",
+            name="Scoped Group Aggregation Query",
+            desc=(
+                "Group entities by explicit keys and aggregate per group."
+            ),
+            examples=["Count transfer records by relation type for Alice's neighborhood."],
+            canonical_intents=["query.aggregation.group_count"],
+            constraint_tags=[
+                "requires_group_by",
+                "forbid_unbounded_enumeration",
+                "global_answer_required",
+            ],
+            required_query_features=["count(", "group by/with"],
+            forbidden_patterns=["shortestpath("],
+            target_ratio_min=0.05,
+            target_ratio_max=0.16,
+        ),
+        _q(
+            level="L2",
+            subtype_id="q_l2_ranking_topk",
+            name="Ranking Top-K Query",
+            desc=(
+                "Rank candidates with explicit order-by metric and limit K."
+            ),
+            examples=["Top 3 transfer targets of Alice by transfer amount."],
+            canonical_intents=["query.ranking.topk"],
+            constraint_tags=[
+                "requires_order_limit",
+                "forbid_unbounded_enumeration",
+                "global_answer_required",
+            ],
+            required_query_features=["order by", "limit"],
+            forbidden_patterns=[],
+            target_ratio_min=0.06,
+            target_ratio_max=0.18,
         ),
     ]
 
-    # L3: Simple Algorithm Application Tasks (Basic Graph Algorithms) 
     l3_tasks = [
-        SubTaskType(
+        _q(
             level="L3",
-            name="Path Analysis",
+            subtype_id="q_l3_path_shortest",
+            name="Path Analysis (Shortest Path)",
             desc=(
-                "Core logic: Call basic graph algorithms such as BFS and Dijkstra to "
-                "calculate the shortest path between two entities (e.g., logistics "
-                "distribution path, workplace reporting chain) from the global database. "
-                "The algorithm logic is simple, and only a single algorithm is needed to "
-                "obtain results."
+                "Use bounded shortest path style queries with explicit endpoints."
             ),
-            examples=[
-                "What is the shortest distribution path from Store A to Store B?",
-                (
-                    "How many hops are there in the shortest reporting chain from "
-                    "Employee Q to Employee R?"
-                ),
+            examples=["What is the shortest path from Store A to Store B within 4 hops?"],
+            canonical_intents=["query.path.shortest"],
+            constraint_tags=[
+                "requires_hop_bound",
+                "forbid_unbounded_enumeration",
+                "global_answer_required",
             ],
+            required_query_features=["shortestpath(", "*..n"],
+            forbidden_patterns=["shortestpath((a)-[*]-(b))"],
+            target_ratio_min=0.10,
+            target_ratio_max=0.25,
         ),
-        SubTaskType(
+        _q(
             level="L3",
-            name="Local Topological Index Calculation",
+            subtype_id="q_l3_topology_degree",
+            name="Local Topological Degree Query",
             desc=(
-                "Core logic: Call basic topological algorithms such as degree centrality "
-                "and triangle counting to calculate topological indices (e.g., number of "
-                "neighbor nodes, number of triangle relationships) within the associated "
-                "network of a specified entity from the global database. The analysis scope "
-                "focuses on the local associated network."
+                "Compute local topological degree-like metrics in a bounded subspace."
             ),
-            examples=[
-                (
-                    "How many triangle relationships are there in the friend circle "
-                    "(within 1 hop) of User W?"
-                ),
-                "What is the number of directly associated nodes (degree) of Product X?",
+            examples=["Which node has the highest degree around account Alice?"],
+            canonical_intents=["query.topology.degree", "query.ranking.topk"],
+            constraint_tags=[
+                "requires_order_limit",
+                "forbid_unbounded_enumeration",
+                "global_answer_required",
             ],
+            required_query_features=["count(", "order by", "limit"],
+            forbidden_patterns=["size(("],
+            target_ratio_min=0.10,
+            target_ratio_max=0.22,
         ),
-        SubTaskType(
+        _q(
             level="L3",
-            name="Local Node Importance Ranking",
+            subtype_id="q_l3_path_constrained",
+            name="Constrained Path Query",
             desc=(
-                "Core logic: Call algorithms such as simplified PageRank and degree "
-                "centrality to perform Top-K importance ranking on the associated nodes of "
-                "a specified entity (e.g., suppliers, employees, orders) from the global "
-                "database. The analysis scope is limited to the set of associated nodes."
+                "Evaluate bounded paths constrained by relation types or path predicates."
             ),
             examples=[
-                "Who are the top 3 most important suppliers among those associated with Product Z?",
-                (
-                    "Who are the top 5 employees with the highest degree centrality in "
-                    "the Technology Department?"
-                ),
+                "Is there a path from Account A to Loan B within 3 hops using only TRANSFER/REPAY?"
             ],
-        ), 
-    ]
-
-    #  L4: Complex Algorithm Application Tasks (Advanced Algorithms/Prediction/Anomaly Detection) 
-    l4_tasks = [
-        SubTaskType(
-            level="L4",
-            name="Complex Pattern Matching",
-            desc=(
-                "Core logic: Call complex graph algorithms such as subgraph isomorphism "
-                "to match complex subgraph structures with multiple attribute constraints "
-                "(e.g., enterprise cooperation chains, workplace management chains) from the "
-                "global database. It requires accurate identification of complex association "
-                "patterns among multiple entities and multiple relationships."
-            ),
-            examples=[
-                (
-                    "Which suppliers that cooperate with the government are among the "
-                    "subsidiaries controlled by companies with a registered capital "
-                    "exceeding 100 million?"
-                ),
-                (
-                    "Which employees managed by supervisors who have been employed for "
-                    "more than 3 years are in charge of projects worth over 1 million?"
-                ),
+            canonical_intents=["query.path.constrained", "query.path.reachability"],
+            constraint_tags=[
+                "requires_hop_bound",
+                "forbid_unbounded_enumeration",
+                "global_answer_required",
             ],
+            required_query_features=["*..n", "relationships(p)", "type(rel)"],
+            forbidden_patterns=["[*]-", "shortestpath((a)-[*]-(b))"],
+            target_ratio_min=0.0,
+            target_ratio_max=0.16,
         ),
-        SubTaskType(
-            level="L4",
-            name="Entity and Relationship Anomaly Detection",
+        _q(
+            level="L3",
+            subtype_id="q_l3_cycle_exists",
+            name="Cycle Existence Query",
             desc=(
-                "Core logic: Call anomaly detection algorithms such as LOF and autoencoders "
-                "to identify abnormal patterns (e.g., abnormal user behavior, abnormal "
-                "equipment parameters, abnormal network topology) within the associated "
-                "network of a specified entity from the global database. It requires "
-                "mining implicit abnormal features."
+                "Determine whether bounded cycles exist around a target entity."
             ),
-            examples=[
-                (
-                    "Does User A have abnormal login behavior of frequent IP switches "
-                    "across different regions?"
-                ),
-                (
-                    "Do the operating parameters of Equipment B have abnormal "
-                    "fluctuations deviating from the historical baseline?"
-                ),
+            examples=["Does account A participate in any cycle within 4 hops?"],
+            canonical_intents=["query.cycle.exists", "query.path.reachability"],
+            constraint_tags=[
+                "requires_hop_bound",
+                "forbid_unbounded_enumeration",
+                "global_answer_required",
             ],
+            required_query_features=["*..n", "count(p) > 0"],
+            forbidden_patterns=["[*]-", "shortestpath((a)-[*]-(b))"],
+            target_ratio_min=0.0,
+            target_ratio_max=0.14,
         ),
-        SubTaskType(
-            level="L4",
-            name="Prediction and Recommendation",
+        _q(
+            level="L3",
+            subtype_id="q_l3_motif_triangle_count",
+            name="Motif Triangle Counting Query",
             desc=(
-                "Core logic: Call machine learning algorithms such as link prediction and "
-                "GNN to predict the future association relationships (e.g., business "
-                "cooperation, social friends) of a specified entity from the global "
-                "database, or recommend potential associated nodes. It requires modeling "
-                "based on historical data."
+                "Count closed triads/triangles in the neighborhood of a target entity."
             ),
-            examples=[
-                "Which potential partners may Company CC add in the next 3 months?",
-                "Which potential friends may User DD add?",
+            examples=["How many triangles exist around account A?"],
+            canonical_intents=["query.motif.triangle_count", "query.aggregation.count"],
+            constraint_tags=[
+                "forbid_unbounded_enumeration",
+                "global_answer_required",
             ],
+            required_query_features=["count(", "(a)--(b)--(c)--(a)"],
+            forbidden_patterns=["shortestpath("],
+            target_ratio_min=0.0,
+            target_ratio_max=0.14,
         ),
-        SubTaskType(
-            level="L4",
-            name="Multi-Algorithm Hybrid Analysis",
+        _q(
+            level="L3",
+            subtype_id="q_l3_similarity_shared_neighbors",
+            name="Structural Similarity (Shared Neighbors) Query",
             desc=(
-                "Core logic: Combine 2 or more algorithms (e.g., clustering + PageRank, "
-                "community detection + anomaly detection) to conduct step-by-step analysis "
-                "on the associated network of a specified entity from the global database. "
-                "It requires integrating results of multiple algorithms to obtain in-depth "
-                "insights."
+                "Measure structural similarity by counting shared neighbors and ranking."
             ),
-            examples=[
-                (
-                    "First cluster the suppliers associated with Product Z, then find the "
-                    "core suppliers in each cluster. What is the result?"
-                ),
-                (
-                    "First cluster user groups by interests, then find the top 3 "
-                    "influential users in each cluster. What is the result?"
-                ),
+            examples=["Top 3 accounts most similar to account A by shared neighbors."],
+            canonical_intents=["query.similarity.shared_neighbors", "query.ranking.topk"],
+            constraint_tags=[
+                "requires_order_limit",
+                "forbid_unbounded_enumeration",
+                "global_answer_required",
             ],
+            required_query_features=["count(", "order by", "limit"],
+            forbidden_patterns=["shortestpath("],
+            target_ratio_min=0.0,
+            target_ratio_max=0.16,
         ),
     ]
 
     L1 = LevelInfo(
         level="L1",
         name="Simple Query Tasks",
-        desc=(
-            "Level Core: Focuses on basic queries within 0-1 hops. The operation objects are "
-            "1-2 entities. The core is to retrieve direct attributes, determine 1-hop "
-            "relationships, or perform single-step reasoning. No complex association "
-            "logic or algorithm support is required, and the data source is the global "
-            "database."
-        ),
+        desc="0-1 hop lookups/filters/reasoning without aggregation or graph algorithms.",
         subtasks=l1_tasks,
     )
-
     L2 = LevelInfo(
         level="L2",
         name="Complex Query Tasks (No Algorithms)",
-        desc=(
-            "Level Core: Focuses on complex queries with ≥2 hops. It needs to integrate "
-            "multiple entities, multiple relationships, or multiple conditions, and "
-            "supports pattern matching, aggregation calculation, and multi-step reasoning. "
-            "The core is to obtain in-depth information through association logic, without "
-            "calling graph algorithms. The data source is the global database."
-        ),
+        desc="Bounded multi-hop, combined predicates, aggregation and ranking queries.",
         subtasks=l2_tasks,
     )
-
     L3 = LevelInfo(
         level="L3",
-        name="Simple Algorithm Application Tasks",
-        desc=(
-            "Level Core: Based on the global database, call single, mature basic graph "
-            "algorithms (e.g., BFS, degree centrality), focusing on path analysis, "
-            "topological calculation, and importance ranking of local associated networks. "
-            "Users do not need to understand algorithm details, and the core is to obtain "
-            "structured insights through algorithms."
-        ),
+        name="Query Tasks Requiring Strong Structural Constraints",
+        desc="Shortest-path and topology-style tasks with strict bounded constraints.",
         subtasks=l3_tasks,
     )
 
-    L4 = LevelInfo(
-        level="L4",
-        name="Complex Algorithm Application Tasks",
-        desc=(
-            "Level Core: Based on the global database, call complex graph algorithms, "
-            "machine learning models, or multi-algorithm combinations, focusing on complex "
-            "pattern matching, anomaly detection, prediction and recommendation, and "
-            "in-depth analysis. The core is to mine implicit rules and future trends "
-            "through advanced algorithms to obtain high-level business insights."
-        ),
-        subtasks=l4_tasks,
-    )
     REGISTER_LIST = [L1, L2, L3]
 
 
 SUBTYPES_MAP = {
     "query": [*QueryTaskSubtypes.REGISTER_LIST],
-    # "non-query": TODO
+}
+
+_QUERY_SUBTYPE_META_BY_ID: dict[str, SubTaskType] = {
+    subtype.subtype_id: subtype
+    for level in QueryTaskSubtypes.REGISTER_LIST
+    for subtype in level.subtasks
 }
 
 
+def _normalize_subtype_key(value: str) -> str:
+    return re.sub(r"[^a-z0-9]+", "_", (value or "").strip().lower()).strip("_")
+
+
+_DEFAULT_SUBTYPE_BY_LEVEL: dict[str, str] = {
+    "L1": "q_l1_attr_lookup",
+    "L2": "q_l2_filter_combined",
+    "L3": "q_l3_path_shortest",
+}
+
+_SUBTYPE_ALIAS_MAP: dict[str, str] = {
+    # Current ids and aliases.
+    "q_l1_attr_lookup": "q_l1_attr_lookup",
+    "q_l1_neighbor_query": "q_l1_neighbor_query",
+    "q_l1_filter_single": "q_l1_filter_single",
+    "q_l1_reasoning_single_step": "q_l1_reasoning_single_step",
+    "q_l2_path_reachability": "q_l2_path_reachability",
+    "q_l2_filter_combined": "q_l2_filter_combined",
+    "q_l2_reasoning_chain": "q_l2_reasoning_chain",
+    "q_l2_aggregation_count": "q_l2_aggregation_count",
+    "q_l2_aggregation_group_count": "q_l2_aggregation_group_count",
+    "q_l2_ranking_topk": "q_l2_ranking_topk",
+    "q_l3_path_shortest": "q_l3_path_shortest",
+    "q_l3_topology_degree": "q_l3_topology_degree",
+    "q_l3_path_constrained": "q_l3_path_constrained",
+    "q_l3_cycle_exists": "q_l3_cycle_exists",
+    "q_l3_motif_triangle_count": "q_l3_motif_triangle_count",
+    "q_l3_similarity_shared_neighbors": "q_l3_similarity_shared_neighbors",
+    # Legacy display names.
+    "entity_attribute_and_label_query": "q_l1_attr_lookup",
+    "direct_relationship_and_neighbor_query": "q_l1_neighbor_query",
+    "simple_attribute_filtering": "q_l1_filter_single",
+    "single_step_intuitive_reasoning_query": "q_l1_reasoning_single_step",
+    "multi_hop_relationship_and_path_query": "q_l2_path_reachability",
+    "pattern_based_and_combined_filtering_query": "q_l2_filter_combined",
+    "multi_step_chain_reasoning_query": "q_l2_reasoning_chain",
+    "path_analysis": "q_l3_path_shortest",
+    "local_topological_index_calculation": "q_l3_topology_degree",
+    "constrained_path_query": "q_l3_path_constrained",
+    "constrained_path": "q_l3_path_constrained",
+    "cycle_existence_query": "q_l3_cycle_exists",
+    "cycle_detection_query": "q_l3_cycle_exists",
+    "cycle_detection": "q_l3_cycle_exists",
+    "motif_triangle_counting_query": "q_l3_motif_triangle_count",
+    "triangle_motif_count": "q_l3_motif_triangle_count",
+    "structural_similarity_shared_neighbors_query": "q_l3_similarity_shared_neighbors",
+    "shared_neighbor_similarity": "q_l3_similarity_shared_neighbors",
+    "local_node_importance_ranking": "q_l2_ranking_topk",
+    # Short aliases from tests and prior runs.
+    "attribute_filtering": "q_l1_filter_single",
+    "multi_hop": "q_l2_path_reachability",
+    "ranking": "q_l2_ranking_topk",
+    "aggregation": "q_l2_aggregation_count",
+    "topology_degree": "q_l3_topology_degree",
+}
+
+
+def resolve_query_subtype_id(
+    subtype: str | None,
+    *,
+    level: TASK_LEVEL | None = None,
+) -> str | None:
+    if not subtype:
+        return _DEFAULT_SUBTYPE_BY_LEVEL.get(level or "") if level else None
+    low = (subtype or "").strip().lower()
+    if low in _QUERY_SUBTYPE_META_BY_ID:
+        return low
+    normalized = _normalize_subtype_key(subtype)
+    resolved = _SUBTYPE_ALIAS_MAP.get(normalized)
+    if resolved:
+        return resolved
+    return None
+
+
+def get_query_subtype_meta(subtype: str | None, *, level: TASK_LEVEL | None = None) -> SubTaskType | None:
+    resolved = resolve_query_subtype_id(subtype, level=level)
+    if not resolved:
+        return None
+    return _QUERY_SUBTYPE_META_BY_ID.get(resolved)
+
+
+def get_subtype_canonical_intents(subtype: str | None, *, level: TASK_LEVEL | None = None) -> list[str]:
+    meta = get_query_subtype_meta(subtype, level=level)
+    if not meta:
+        return []
+    return list(meta.canonical_intents or [])
+
+
 class GraphTaskTypesInfo:
-    """Helper for tracking task-type statistics during dataset synthesis.
+    """Structured task taxonomy and subtype counters for synthesis."""
 
-    This class:
-      - Initializes counters per registered subtask type for the chosen strategy.
-      - Provides methods to update counts from generated Row objects.
-      - Can produce a human-readable tasks description (get_tasks_info) that
-        includes level names, descriptions and examples for prompting the LLM.
-      - Can return current count statistics as a JSON-formatted string (get_count_info).
-
-    Usage:
-      info = GraphTaskTypesInfo(strategy="query")
-      info.update(list_of_rows)   # increment counts according to rows' levels/subtasks
-      info.get_tasks_info()       # produce descriptive text for prompts
-      info.get_count_info()       # get JSON counts for logging or printing
-    """
     def __init__(
         self,
         strategy: GENERATOR_STRATEGY = "query",
@@ -382,47 +507,102 @@ class GraphTaskTypesInfo:
         self.strategy = strategy
         self.tasks_info = SUBTYPES_MAP[str(strategy)]
         self.count_info: Dict[str, Dict[str, int]] = {}
+        self.subtype_meta_by_id: dict[str, SubTaskType] = {
+            subtype.subtype_id: subtype
+            for level_info in self.tasks_info
+            for subtype in level_info.subtasks
+        }
+        self.level_by_subtype_id: dict[str, TASK_LEVEL] = {
+            subtype.subtype_id: subtype.level
+            for subtype in self.subtype_meta_by_id.values()
+        }
 
         for level_info in self.tasks_info:
             self.count_info[level_info.level] = {}
             for subtask in level_info.subtasks:
-                self.count_info[level_info.level][subtask.name] = 0
+                self.count_info[level_info.level][subtask.subtype_id] = 0
+
+    def resolve_subtype_id(self, subtype: str | None, *, level: TASK_LEVEL | None = None) -> str | None:
+        return resolve_query_subtype_id(subtype=subtype, level=level)
+
+    def get_subtype_meta(self, subtype: str | None, *, level: TASK_LEVEL | None = None) -> SubTaskType | None:
+        subtype_id = self.resolve_subtype_id(subtype, level=level)
+        if not subtype_id:
+            return None
+        return self.subtype_meta_by_id.get(subtype_id)
 
     def update(self, rows: List[Row]):
-        """Update counts based on a list of Row objects."""
+        """Update counters and normalize rows with stable subtype ids."""
         for row in rows:
-            self.add(level=row.level, subtask=row.task_subtype)
+            subtype_id = row.task_subtype_id or self.resolve_subtype_id(row.task_subtype, level=row.level)
+            if not subtype_id:
+                self.add(level=row.level, subtask=None)
+                continue
+            row.task_subtype_id = subtype_id
+            self.add(level=row.level, subtask=subtype_id)
 
-    def add(self, level: TASK_LEVEL, subtask: str):
-        """Increment count for the specified level and subtask."""
-        if level in self.count_info and subtask in self.count_info[level]:
-            self.count_info[level][subtask] += 1
-        elif level in self.count_info:
+    def add(self, level: TASK_LEVEL, subtask: str | None):
+        """Increment counter for the specified level and subtype id."""
+        subtype_id = self.resolve_subtype_id(subtask, level=level) if subtask else None
+        if level in self.count_info and subtype_id and subtype_id in self.count_info[level]:
+            self.count_info[level][subtype_id] += 1
+            return
+        if level in self.count_info:
             if "unknown" not in self.count_info[level]:
                 self.count_info[level]["unknown"] = 0
             self.count_info[level]["unknown"] += 1
-        else:
-            print(f"[GraphTaskInfos]unknown level {level}")
+            return
+        print(f"[GraphTaskInfos]unknown level {level}")
+
+    def total_rows(self) -> int:
+        total = 0
+        for level_counts in self.count_info.values():
+            total += sum(level_counts.values())
+        return total
+
+    def subtype_counts_flat(self) -> dict[str, int]:
+        flat: dict[str, int] = {}
+        for level_counts in self.count_info.values():
+            for subtype_id, cnt in level_counts.items():
+                flat[subtype_id] = flat.get(subtype_id, 0) + int(cnt)
+        return flat
+
+    def coverage_gaps(self, *, projected_total: int) -> dict[str, int]:
+        """Return subtype coverage gap under target min ratios for projected dataset size."""
+        projected_total = max(projected_total, 1)
+        counts = self.subtype_counts_flat()
+        gaps: dict[str, int] = {}
+        for subtype_id, meta in self.subtype_meta_by_id.items():
+            target_min_count = int(math.ceil(projected_total * float(meta.target_ratio_min)))
+            current = int(counts.get(subtype_id, 0))
+            gaps[subtype_id] = max(0, target_min_count - current)
+        return gaps
 
     def get_tasks_info(self) -> str:
-        """Get human-readable tasks description for LLM prompting."""
+        """Get human-readable taxonomy description for prompts."""
         tasks_info = ""
         for level_info in self.tasks_info:
             tasks_info += f"#### {level_info.level}: {level_info.name}\n"
             tasks_info += f"description: {level_info.desc}\n"
             tasks_info += "subtask types: \n"
             for subtask in level_info.subtasks:
-                tasks_info += f" - {subtask.name}: {subtask.desc}\n"
+                tasks_info += (
+                    f" - {subtask.subtype_id} ({subtask.name}): {subtask.desc}\n"
+                )
+                tasks_info += (
+                    f" - intents: {', '.join(subtask.canonical_intents)}\n"
+                )
+                if subtask.constraint_tags:
+                    tasks_info += (
+                        f" - constraints: {', '.join(subtask.constraint_tags)}\n"
+                    )
                 tasks_info += " - examples:\n"
-
                 for idx, example in enumerate(subtask.examples, 1):
                     tasks_info += f"   {idx}. {example}\n"
                 tasks_info += "\n"
-
             tasks_info += "---\n\n"
-
         return tasks_info
 
     def get_count_info(self) -> str:
-        """Get current task-type counts as a JSON-formatted string."""
+        """Get subtype counters as JSON text."""
         return json.dumps(self.count_info, indent=4, ensure_ascii=False)

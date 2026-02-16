@@ -1,10 +1,12 @@
 from abc import ABC, abstractmethod
+from dataclasses import dataclass
 import json
 import random
 import time
 from typing import Dict, List, Set, Tuple
 
 from app.core.toolkit.graph_db.graph_db import GraphDb
+from app.core.workflow.dataset_synthesis.utils import normalize_intent_set
 
 
 class SubGraphSampler(ABC):
@@ -24,6 +26,239 @@ class SubGraphSampler(ABC):
     def get_random_subgraph(
         self, graph_db: GraphDb, max_depth: int, max_nodes: int, max_edges: int
     ) -> str: ...
+
+    def get_targeted_subgraph(
+        self,
+        graph_db: GraphDb,
+        max_depth: int,
+        max_nodes: int,
+        max_edges: int,
+        required_intents: list[str] | None = None,
+    ) -> str:
+        """Return a subgraph targeted for required intents (default fallback)."""
+        return self.get_random_subgraph(
+            graph_db=graph_db,
+            max_depth=max_depth,
+            max_nodes=max_nodes,
+            max_edges=max_edges,
+        )
+
+    def register_acceptance(
+        self,
+        required_intents: list[str] | None,
+        accepted_rows_count: int,
+    ) -> None:
+        """Record acceptance feedback from generator (optional hook)."""
+        return None
+
+    def get_sampling_metrics(self) -> dict:
+        """Return sampling metrics for observability."""
+        return {}
+
+
+@dataclass
+class _IntentSamplingStats:
+    attempts: int = 0
+    feasible_hits: int = 0
+    accepted_subgraphs: int = 0
+    accepted_rows: int = 0
+    attempt_budget: int = 5
+
+    def feasible_hit_rate(self) -> float:
+        return self.feasible_hits / self.attempts if self.attempts > 0 else 0.0
+
+    def accepted_rate(self) -> float:
+        return self.accepted_subgraphs / self.attempts if self.attempts > 0 else 0.0
+
+
+class StratifiedHybridSampler(SubGraphSampler):
+    """SHS sampler with feasibility probes and coverage feedback.
+
+    This implementation keeps RandomWalk behavior as the backbone and adds:
+      1) targeted retries for required intents,
+      2) cheap feasibility probes (accept/reject before LLM generation),
+      3) per-intent metrics (attempts, feasible-hit-rate, accepted-rate).
+    """
+
+    def __init__(self):
+        self._base = RandomWalkSampler()
+        self._intent_stats: dict[str, _IntentSamplingStats] = {}
+        self._default_attempt_budget = 6
+
+    @staticmethod
+    def _normalize_required_intents(required_intents: list[str] | None) -> list[str]:
+        normalized = normalize_intent_set(required_intents or ["query.lookup"], task_subtype="")
+        if not normalized:
+            return ["query.lookup"]
+        return normalized
+
+    def get_random_subgraph(
+        self, graph_db: GraphDb, max_depth: int, max_nodes: int, max_edges: int
+    ) -> str:
+        return self._base.get_random_subgraph(
+            graph_db=graph_db,
+            max_depth=max_depth,
+            max_nodes=max_nodes,
+            max_edges=max_edges,
+        )
+
+    @staticmethod
+    def _probe_intent_feasibility(subgraph: str, intent: str) -> bool:
+        try:
+            obj = json.loads(subgraph)
+        except Exception:
+            return False
+
+        nodes = obj.get("nodes", []) if isinstance(obj, dict) else []
+        rels = obj.get("relationships", []) if isinstance(obj, dict) else []
+        node_cnt = len(nodes)
+        rel_cnt = len(rels)
+        labels = set()
+        has_numeric_rel_prop = False
+        has_numeric_node_prop = False
+        for node in nodes:
+            labels.update(node.get("labels", []) if isinstance(node, dict) else [])
+            props = node.get("properties", {}) if isinstance(node, dict) else {}
+            if isinstance(props, dict):
+                for value in props.values():
+                    if isinstance(value, (int, float)):
+                        has_numeric_node_prop = True
+                        break
+        for rel in rels:
+            props = rel.get("properties", {}) if isinstance(rel, dict) else {}
+            if isinstance(props, dict):
+                for value in props.values():
+                    if isinstance(value, (int, float)):
+                        has_numeric_rel_prop = True
+                        break
+            if has_numeric_rel_prop:
+                break
+
+        low = (intent or "").lower()
+        if low in {"query.lookup", "query.reasoning.single_step", ""}:
+            return node_cnt > 0
+        if low in {"query.neighbor", "query.filter.single"}:
+            return node_cnt >= 1 and rel_cnt >= 1
+        if low in {"query.filter.combined", "query.reasoning.chain"}:
+            return node_cnt >= 2 and rel_cnt >= 1
+        if low == "query.path.reachability":
+            return node_cnt >= 2 and rel_cnt >= 1
+        if low == "query.path.shortest":
+            return node_cnt >= 2 and rel_cnt >= 1
+        if low == "query.path.constrained":
+            return node_cnt >= 2 and rel_cnt >= 2
+        if low == "query.cycle.exists":
+            return node_cnt >= 2 and rel_cnt >= 2
+        if low == "query.motif.triangle_count":
+            return node_cnt >= 3 and rel_cnt >= 3
+        if low == "query.similarity.shared_neighbors":
+            return node_cnt >= 3 and rel_cnt >= 2
+        if low == "query.ranking.topk":
+            return node_cnt >= 2 and rel_cnt >= 1 and (has_numeric_rel_prop or has_numeric_node_prop)
+        if low == "query.aggregation.count":
+            return rel_cnt >= 1
+        if low == "query.aggregation.group_count":
+            return node_cnt >= 2 and (len(labels) >= 2 or rel_cnt >= 2)
+        if low == "query.topology.degree":
+            return node_cnt >= 2 and rel_cnt >= 1
+        return node_cnt > 0 and rel_cnt > 0
+
+    def _get_stats(self, intent: str) -> _IntentSamplingStats:
+        key = (intent or "query.lookup").lower()
+        if key not in self._intent_stats:
+            self._intent_stats[key] = _IntentSamplingStats(
+                attempts=0,
+                feasible_hits=0,
+                accepted_subgraphs=0,
+                accepted_rows=0,
+                attempt_budget=self._default_attempt_budget,
+            )
+        return self._intent_stats[key]
+
+    def get_targeted_subgraph(
+        self,
+        graph_db: GraphDb,
+        max_depth: int,
+        max_nodes: int,
+        max_edges: int,
+        required_intents: list[str] | None = None,
+    ) -> str:
+        intents = [i.lower() for i in self._normalize_required_intents(required_intents) if i]
+        primary = intents[0] if intents else "query.lookup"
+        budget = max(1, self._get_stats(primary).attempt_budget)
+
+        fallback_subgraph = ""
+        for _ in range(budget):
+            for intent in intents:
+                self._get_stats(intent).attempts += 1
+            candidate = self.get_random_subgraph(
+                graph_db=graph_db,
+                max_depth=max_depth,
+                max_nodes=max_nodes,
+                max_edges=max_edges,
+            )
+            if not candidate:
+                continue
+            if not fallback_subgraph:
+                fallback_subgraph = candidate
+
+            feasible = all(
+                self._probe_intent_feasibility(candidate, intent) for intent in intents
+            )
+            if feasible:
+                for intent in intents:
+                    self._get_stats(intent).feasible_hits += 1
+                return candidate
+        return fallback_subgraph
+
+    def register_acceptance(
+        self,
+        required_intents: list[str] | None,
+        accepted_rows_count: int,
+    ) -> None:
+        intents = [i.lower() for i in self._normalize_required_intents(required_intents) if i]
+        if not intents:
+            intents = ["query.lookup"]
+        for intent in intents:
+            stats = self._get_stats(intent)
+            if accepted_rows_count > 0:
+                stats.accepted_subgraphs += 1
+                stats.accepted_rows += accepted_rows_count
+                # Saturated: reduce retries for this intent.
+                if stats.accepted_rate() > 0.75:
+                    stats.attempt_budget = max(2, stats.attempt_budget - 1)
+            else:
+                # Low yield: increase retries moderately.
+                if stats.accepted_rate() < 0.2:
+                    stats.attempt_budget = min(12, stats.attempt_budget + 1)
+
+    def get_sampling_metrics(self) -> dict:
+        rows: dict[str, dict] = {}
+        for intent, stats in self._intent_stats.items():
+            rows[intent] = {
+                "attempts": stats.attempts,
+                "feasible_hit_rate": round(stats.feasible_hit_rate(), 6),
+                "accepted_rate": round(stats.accepted_rate(), 6),
+                "accepted_rows": stats.accepted_rows,
+                "attempt_budget": stats.attempt_budget,
+            }
+        attempts_by_intent = {intent: item["attempts"] for intent, item in rows.items()}
+        feasible_hits_by_intent = {
+            intent: self._intent_stats[intent].feasible_hits for intent in rows
+        }
+        accepted_hits_by_intent = {
+            intent: self._intent_stats[intent].accepted_subgraphs for intent in rows
+        }
+        accepted_rows_by_intent = {
+            intent: self._intent_stats[intent].accepted_rows for intent in rows
+        }
+        return {
+            "intent_sampling": rows,
+            "attempts_by_intent": attempts_by_intent,
+            "feasible_hits_by_intent": feasible_hits_by_intent,
+            "accepted_hits_by_intent": accepted_hits_by_intent,
+            "accepted_rows_by_intent": accepted_rows_by_intent,
+        }
 
 class RandomWalkSampler(SubGraphSampler):
     """Sampler that builds a subgraph via biased random walks.
@@ -168,11 +403,11 @@ class RandomWalkSampler(SubGraphSampler):
         
         RETURN DISTINCT elementId(neighbor) AS node_id, elementId(r) AS rel_id
         """  # noqa: E501
+        new_nodes: Set[int] = set()
+        new_rels: Set[int] = set()
         try:
             with graph_db.conn.session() as session:
                 result = session.run(query, params)
-                new_nodes = set()
-                new_rels = set()
                 for record in result:
                     if record.get("node_id", "") != "":
                         new_nodes.add(record["node_id"])

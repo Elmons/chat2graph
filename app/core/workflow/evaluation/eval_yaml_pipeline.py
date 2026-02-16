@@ -16,8 +16,12 @@ from app.core.common.type import GraphDbType
 from app.core.model.graph_db_config import GraphDbConfig
 from app.core.prompt.workflow_generator import eval_prompt_template
 from app.core.reasoner.model_service_factory import ModelService, ModelServiceFactory
-from app.core.workflow.dataset_synthesis.model import WorkflowTrainDataset
-from app.core.workflow.dataset_synthesis.utils import load_workflow_train_dataset
+from app.core.workflow.dataset_synthesis.model import Row, WorkflowTrainDataset
+from app.core.workflow.dataset_synthesis.utils import (
+    load_workflow_train_dataset,
+    normalize_row_protocol,
+    qa_gate_reason,
+)
 from app.core.workflow.evaluation.openai_batch_file import run_batch_chat
 from app.core.workflow.workflow_generator.mcts_workflow_generator.model import ExecuteResult
 from app.core.workflow.workflow_generator.mcts_workflow_generator.runner import WorkflowRunner
@@ -156,6 +160,8 @@ class YamlEvalSummary:
     avg_latency_ms: float = 0.0
     total_tokens: int = 0
     error_breakdown: Dict[str, int] = field(default_factory=dict)
+    qa_gate_pass_rate: float = 1.0
+    qa_gate_reject_breakdown: Dict[str, int] = field(default_factory=dict)
     error: str = ""
 
 
@@ -197,6 +203,21 @@ def _serialize_graph_db_config(config: Optional[GraphDbConfig]) -> Dict[str, Any
     return config.to_dict()
 
 
+def _dataset_qa_profile(rows: Sequence[Row]) -> tuple[float, dict[str, int]]:
+    if not rows:
+        return 1.0, {}
+    rejects: dict[str, int] = {}
+    passed = 0
+    for row in rows:
+        normalized = normalize_row_protocol(row)
+        reason = qa_gate_reason(normalized, engine_hint=None)
+        if reason is None:
+            passed += 1
+            continue
+        rejects[reason] = rejects.get(reason, 0) + 1
+    return passed / len(rows), rejects
+
+
 async def evaluate_yaml(
     *,
     dataset: WorkflowTrainDataset,
@@ -223,6 +244,8 @@ async def evaluate_yaml(
         normalized_graph_db = _graph_db_config_from_dict(graph_db_config)
     else:
         normalized_graph_db = graph_db_config
+
+    qa_gate_pass_rate, qa_gate_reject_breakdown = _dataset_qa_profile(dataset.data)
 
     try:
         scorer_llm: Optional[ModelService] = None
@@ -329,6 +352,8 @@ async def evaluate_yaml(
             avg_latency_ms=avg_latency_ms,
             total_tokens=total_tokens,
             error_breakdown=error_breakdown,
+            qa_gate_pass_rate=qa_gate_pass_rate,
+            qa_gate_reject_breakdown=qa_gate_reject_breakdown,
             error="",
         )
     except Exception as e:
@@ -345,6 +370,8 @@ async def evaluate_yaml(
             avg_latency_ms=0.0,
             total_tokens=0,
             error_breakdown={},
+            qa_gate_pass_rate=qa_gate_pass_rate,
+            qa_gate_reject_breakdown=qa_gate_reject_breakdown,
             error=str(e),
         )
 
@@ -367,6 +394,8 @@ async def evaluate_yaml(
             "success_rate": summary.success_rate,
             "avg_latency_ms": summary.avg_latency_ms,
             "total_tokens": summary.total_tokens,
+            "qa_gate_pass_rate": summary.qa_gate_pass_rate,
+            "qa_gate_reject_breakdown": summary.qa_gate_reject_breakdown,
             "error": summary.error,
         },
     }

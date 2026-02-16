@@ -57,6 +57,8 @@ async def test_evaluate_yaml_writes_results_and_summary(monkeypatch: pytest.Monk
 
     assert summary.error == ""
     assert summary.avg_score == 1.5  # (3 + 0) / 2
+    assert summary.qa_gate_pass_rate == 1.0
+    assert summary.qa_gate_reject_breakdown == {}
     assert (out_dir / "results.json").exists()
     assert (out_dir / "summary.json").exists()
     assert (out_dir / "run_meta.json").exists()
@@ -122,6 +124,7 @@ async def test_evaluate_yaml_llm_scoring_uses_model_factory(
 
     assert summary.error == ""
     assert summary.avg_score == 3.0
+    assert summary.qa_gate_pass_rate == 1.0
     assert (out_dir / "run_meta.json").exists()
 
 
@@ -200,3 +203,55 @@ async def test_evaluate_yaml_accepts_graph_db_config_dict(monkeypatch: pytest.Mo
     assert seen["graph_db_config"].name == "eval_db"
     run_meta = json.loads((out_dir / "run_meta.json").read_text(encoding="utf-8"))
     assert run_meta["graph_db_config"]["name"] == "eval_db"
+
+
+@pytest.mark.asyncio
+async def test_evaluate_yaml_reports_dataset_qa_gate_profile(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    dataset = WorkflowTrainDataset(
+        name="ds",
+        task_desc="desc",
+        data=[
+            Row(
+                level="L1",
+                task_type="query",
+                task_subtype="t",
+                task="List all friends of Alice",
+                verifier="MATCH (n) RETURN n",
+                generation_scope="local_subgraph",
+                answer_scope="global_graph",
+            )
+        ],
+    )
+
+    async def _fake_run_dataset(self, *, workflow_path, rows, graph_db_config=None, reset_state=True):
+        return [
+            WorkflowRunRecord(
+                task=rows[0].task,
+                verifier=rows[0].verifier,
+                model_output="x",
+                error="",
+                latency_ms=1.0,
+                tokens=1,
+            )
+        ]
+
+    monkeypatch.setattr(
+        "app.core.workflow.evaluation.eval_yaml_pipeline.WorkflowRunner.run_dataset",
+        _fake_run_dataset,
+    )
+
+    yaml_path = tmp_path / "workflow.yml"
+    yaml_path.write_text("app: {name: test}\nexperts: []\n", encoding="utf-8")
+    out_dir = tmp_path / "out"
+
+    summary = await evaluate_yaml(
+        dataset=dataset,
+        yaml_path=yaml_path,
+        out_dir=out_dir,
+        score_mode="exact",
+    )
+    assert summary.error == ""
+    assert summary.qa_gate_pass_rate == 0.0
+    assert summary.qa_gate_reject_breakdown.get("missing_expected_global", 0) == 1

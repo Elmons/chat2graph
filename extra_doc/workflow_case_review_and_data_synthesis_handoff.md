@@ -277,6 +277,7 @@
 后续你完成了什么需要写到这个文档，便于交接
 - 从 2026-02-14 开始，执行模式切换为“文档/计划/分析模式”：仅允许产出文档、计划、idea、分析，不再进行任何代码实现或代码修改。
 - 若后续出现实现类需求，先在本文件记录并等待明确解除该限制后再执行。
+- 2026-02-15：用户已明确下达实现与测试指令（含真实 LLM 15/30 条验证），上述限制对 Task2 实施阶段已临时解除，并已记录在 Update Record。
 
 ## 当前状态
 
@@ -607,3 +608,88 @@ Task2 范围收敛（回到 pure QA 主线）
 
 ### New Deliverables (if any)
 - 无（范围与状态更新）
+
+---
+
+### Update Date
+2026-02-15
+
+### Task
+Task2 工程实现落地 + 真实 LLM 验证 + 后续优化建议
+
+### Change Summary
+- 完成 Task2 主链路代码落地（query-only）：
+  - `app/core/workflow/dataset_synthesis/model.py`
+  - `app/core/workflow/dataset_synthesis/generator.py`
+  - `app/core/workflow/dataset_synthesis/utils.py`
+  - `app/core/workflow/dataset_synthesis/sampler.py`
+  - `app/core/prompt/data_synthesis.py`
+  - `app/core/workflow/evaluation/eval_yaml_pipeline.py`
+- 完成关键质量门槛修复：
+  - intent alias 归一 + 强约束意图集合
+  - path 必须有 hop 上界
+  - 过滤 Neo4j 不兼容旧语法（`size((...))`）
+  - shortestPath 变量遮蔽检测
+  - 生成期全局 verifier 执行校验
+- 完成 mock 回归验证：
+  - `test/example/workflow_generator/mock` 全量通过（30 passed）
+  - `test/unit/workflow_generator/test_dataset_generator.py` 扩展并通过
+- 完成真实 LLM 测试：
+  - 15 条：`test/example/workflow_generator/generated_datasets/20260215_162618_query_real_15/quality_audit.json`
+  - 30 条：`test/example/workflow_generator/generated_datasets/20260215_163339_query_real_30/quality_audit.json`
+
+### Reason
+- 用户要求先跑低成本真实验证（15 条），确认稳定后再跑 30 条，并要求写入可交接文档。
+
+### Impact on Timeline
+- Task2 已从“文档方案”推进到“可运行实现 + 实测闭环”。
+- 后续可直接进入“分布均衡与留存率提升”迭代，而非基础稳定性修复。
+
+### New Deliverables (if any)
+- 新增真实测试产物目录：
+  - `test/example/workflow_generator/generated_datasets/20260215_162618_query_real_15/`
+  - `test/example/workflow_generator/generated_datasets/20260215_163339_query_real_30/`
+- 更新主报告：
+  - `extra_doc/task2_integrated_research_report.md`（增加实现状态、实测结果、问题与优化、taxonomy 评估）
+
+### Known Issues / Next Actions
+1. 留存率有提升空间：当前约 `68%~79%`，拒收主要集中在 `implicit_full_enumeration`、`path_missing_hop_bound`、`intent_verifier_mismatch`。
+2. 分布控制仍为软约束：30 条样本 `L1=16, L2=10, L3=4`，存在 L1 偏高。
+3. 同质化仍存在：无完全重复 task，但存在模板化高相似问法。
+4. `task_subtype` 体系结论：当前“可用但不完整”。
+5. 下一步优先级：
+   - P0：上线 level/subtype 硬配额
+   - P0：统一 subtype 与 intent 的规范映射（QueryTaxonomy v2）
+   - P1：加多样性惩罚与实体复用上限
+   - P1：增强 path/ranking/aggregation 定向采样
+
+---
+
+### Update Date
+2026-02-15
+
+### Task
+Task2 完整化需求确认（采样意图 + 分类体系 + 全链路闭环）
+
+### Change Summary
+- 根据用户最新要求，新增“完整化改造范围”并写入主报告：
+  - 完整采样意图字典（SamplingIntentV2）
+  - 完整分类体系（QueryTaxonomy v2）
+  - 完整任务清单（P0/P1/P2）与验收标准
+- 目标从“可运行”提升为“可解释 + 可控 + 可考核”。
+
+### Reason
+- 用户明确要求“把采样意图补完整、分类体系补完整，把数据合成整体补完整”，并要求先形成文档化问题与待办。
+
+### Impact on Timeline
+- 下一阶段工作中心已明确：优先做 taxonomy 与统计口径统一，再做硬配额与多样性治理。
+- 可直接按文档 P0 列表推进实现，不需要再次收敛需求边界。
+
+### New Deliverables (if any)
+- `extra_doc/task2_integrated_research_report.md` 新增：
+  - `## 14. 下一阶段：采样意图与分类体系“完整化”改造清单（Query-only）`
+
+### Scope Freeze for Next Coding Session
+1. 先做 P0，不跨到复合任务（图表/报告）范围。
+2. 所有新增字段与指标必须能进入 `quality_audit` 与 `meta`。
+3. 先保证 size=15 低成本验证通过，再放大到 size=30。

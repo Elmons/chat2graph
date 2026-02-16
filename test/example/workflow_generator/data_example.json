@@ -3,63 +3,70 @@
     "level": "L1",
     "task_type": "query",
     "task_subtype": "Entity Attribute and Label Query",
-    "task": "What is the risk level of the medium with ID '43980465123028'?",
-    "verifier": "Very high risk"
+    "task": "What is the account level of the account with ID '4810125877008405769'?",
+    "verifier": "The account with ID '4810125877008405769' has accountLevel 'Gold level'."
   },
   {
     "level": "L1",
     "task_type": "query",
     "task_subtype": "Direct Relationship and Neighbor Query",
-    "task": "Which accounts has the medium with ID '43980465123028' signed into?",
-    "verifier": "[\"167196136166146266\"]"
+    "task": "Does the account with nickname 'Will Patrick' have a WITHDRAW relationship to any other account?",
+    "verifier": "Yes, the account with nickname 'Will Patrick' has a WITHDRAW relationship to the account with nickname 'Bryan Goodwill'."
   },
   {
     "level": "L1",
     "task_type": "query",
-    "task_subtype": "Single-Step Intuitive Reasoning Query",
-    "task": "What is the email domain of the account owned by 'Doyle Osman'?",
-    "verifier": "zoho.com"
+    "task_subtype": "Simple Attribute Filtering",
+    "task": "How many accounts in the subgraph have accountLevel 'Diamond level'?",
+    "verifier": "There is 1 account with accountLevel 'Diamond level'."
   },
   {
     "level": "L2",
     "task_type": "query",
-    "task_subtype": "Multi-Hop Relationship and Path Query",
-    "task": "Which accounts have repaid the loan with ID '214483932253530068'?",
-    "verifier": "[\"179299560164704472\", \"167196136166146266\"]"
+    "task_subtype": "Scoped Aggregation Count Query",
+    "task": "How many accounts have withdrawn money to the account with nickname 'Bryan Goodwill'?",
+    "verifier": "There are 9 accounts that have WITHDRAW relationships to 'Bryan Goodwill'."
   },
   {
     "level": "L2",
     "task_type": "query",
     "task_subtype": "Pattern-Based and Combined Filtering Query",
-    "task": "Find accounts that received a deposit from the loan with ID '214483932253530068' and have account type 'trust account'.",
-    "verifier": "[\"167196136166146266\"]"
+    "task": "How many accounts with accountLevel 'Basic level' have made a withdrawal to a debit card account?",
+    "verifier": "There are 7 accounts with accountLevel 'Basic level' that have withdrawn to a debit card account (i.e., to 'Bryan Goodwill')."
+  },
+  {
+    "level": "L2",
+    "task_type": "query",
+    "task_subtype": "Ranking Top-K Query",
+    "task": "What are the top 3 withdrawal amounts made to the account with nickname 'Bryan Goodwill'?",
+    "verifier": "The top 3 withdrawal amounts are: 9606322.07, 9217354.84, and 9105171.13."
   },
   {
     "level": "L2",
     "task_type": "query",
     "task_subtype": "Multi-Step Chain Reasoning Query",
-    "task": "What is the nickname of the account that received a deposit of amount '2770860.96' from loan '214483932253530068'?",
-    "verifier": "Jules Barham"
+    "task": "Which company received investment from a person named 'Purdy'?",
+    "verifier": "Feest Group"
   },
   {
     "level": "L3",
     "task_type": "query",
-    "task_subtype": "Path Analysis",
-    "task": "What is the shortest path (in terms of relationship hops) from the account 'Gilbert Manoogian' to the loan with ID 4876835446488830408?",
-    "verifier": "Gilbert Manoogian → (TRANSFER) → Margarito Billington → (REPAY) → Loan ID 4876835446488830408 (2 hops)."
+    "task_subtype": "Local Topological Degree Query",
+    "task": "What is the in-degree of the account with nickname 'Bryan Goodwill' with respect to WITHDRAW relationships?",
+    "verifier": "The account 'Bryan Goodwill' has an in-degree of 9 for WITHDRAW relationships."
   },
   {
     "level": "L3",
     "task_type": "query",
-    "task_subtype": "Local Topological Index Calculation",
-    "task": "How many outgoing REPAY relationships does the account 'Margarito Billington' have in the subgraph?",
-    "verifier": "3"
+    "task_subtype": "Path Analysis (Shortest Path)",
+    "task": "What is the shortest path length (in hops) from the Loan with id '4879931671232648741' to the Account with nickname 'Taylor Blotter'?",
+    "verifier": "The shortest path is: Loan → DEPOSIT → Account (Odessa Gadewoltz, id 1288) → TRANSFER → Account (Taylor Blotter, id 35718). That’s 3 hops."
   },
   {
     "level": "L3",
     "task_type": "query",
-    "task_subtype": "Local Node Importance Ranking",
-    "task": "Among all accounts that have sent money to 'Margarito Billington', which one transferred the largest single amount?",
-    "verifier": "Kristofer Ganter, with a transfer amount of 6441493.86."
+    "task_subtype": "Structural Similarity (Shared Neighbors) Query",
+    "task": "Which two accounts that withdrew to 'Bryan Goodwill' share the most similar withdrawal patterns based on amount magnitude? (Use top-2 by absolute difference in withdrawal amounts.)",
+    "verifier": "The two accounts with the closest withdrawal amounts to 'Bryan Goodwill' are 'Merrill Rannells' (9606322.07) and 'Harry Nesseth' (9217354.84), with a difference of ~388,967.23."
   }
 ]

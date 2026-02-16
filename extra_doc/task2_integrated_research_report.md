@@ -203,16 +203,22 @@
 
 ---
 
-## 9. 项目改造落点（仅文档方案，不改代码）
+## 9. 项目改造落点（代码现状 + 后续）
 
-| 模块路径 | 改造内容 |
-| --- | --- |
-| `app/core/workflow/dataset_synthesis/model.py` | 增加 RowV2.1 字段：`generation_scope`, `answer_scope`, `intent_set`, `global_verifier`, `expected_global` |
-| `app/core/workflow/dataset_synthesis/sampler.py` | 实施 SHS 采样策略与覆盖统计 |
-| `app/core/workflow/dataset_synthesis/generator.py` | 流程改为“意图计划 -> verifier 生成 -> 全局执行 -> task 渲染” |
-| `app/core/prompt/data_synthesis.py` | 收紧输出合约，强制结构化字段 |
-| `app/core/workflow/evaluation/eval_yaml_pipeline.py` | 增加 QA Gate 硬门槛与拒收原因统计 |
-| `app/core/workflow/dataset_synthesis/utils.py` | 增加 engine capability matrix 检查 |
+| 模块路径 | 改造内容 | 状态 |
+| --- | --- | --- |
+| `app/core/workflow/dataset_synthesis/model.py` | RowV2.1 字段治理（`generation_scope`, `answer_scope`, `intent_set`, `global_verifier`, `expected_global`）+ 质量统计类型修复（支持 float 指标） | 已完成（2026-02-15） |
+| `app/core/workflow/dataset_synthesis/sampler.py` | SHS 采样与反馈统计（`feasible_hit_rate`, `accepted_rate`, `attempt_budget`） | 已完成（v1） |
+| `app/core/workflow/dataset_synthesis/generator.py` | 生成流程改造、QA gate 串联、全局执行回填、实时进度日志 | 已完成（v1） |
+| `app/core/prompt/data_synthesis.py` | 输出协议收紧（RowV2.1 字段） | 已完成（v1） |
+| `app/core/workflow/evaluation/eval_yaml_pipeline.py` | 增加 QA 画像（pass rate / reject breakdown） | 已完成（v1） |
+| `app/core/workflow/dataset_synthesis/utils.py` | engine capability matrix + intent 对齐 + 语法/方言硬门槛（含 path hop bound 等） | 已完成（v1） |
+| `test/unit/workflow_generator/test_dataset_generator.py` | 新增 intent alias/语法门槛等回归测试 | 已完成（2026-02-15） |
+
+当前未完成项（按优先级）：
+1. 分布硬约束（level/subtype 配额）仍未上线，当前只有软约束。
+2. task subtype 体系未与 intent taxonomy 完全对齐（仍有别名漂移/语义重叠）。
+3. 聚合类任务在 query-only 主线中覆盖偏低，模板与采样仍需加强。
 
 ---
 
@@ -238,6 +244,54 @@
 - `scope_alignment_rate >= 95%`
 - `intent_verifier_alignment_rate >= 95%`
 - `unanswerable_rate_on_global <= baseline * 50%`
+
+### 10.4 最新工程实测（2026-02-15）
+
+真实 LLM 测试（同一套实现）：
+1. 低成本验证 15 条  
+  - 路径：`test/example/workflow_generator/generated_datasets/20260215_162618_query_real_15/quality_audit.json`  
+  - 结果：`actual_size=15`, `quality_pass=true`, `global executable rate=100%`, `data retention rate=78.95%`
+2. 正式验证 30 条  
+  - 路径：`test/example/workflow_generator/generated_datasets/20260215_163339_query_real_30/quality_audit.json`  
+  - 结果：`actual_size=30`, `quality_pass=true`, `global executable rate=100%`, `data retention rate=68.18%`
+
+结论：
+1. 真值可靠性与可执行性指标已达到发布门槛。
+2. 留存率仍有优化空间（当前约 68%-79%，受严格 QA gate 影响）。
+
+### 10.5 当前问题与后续优化空间
+
+当前问题：
+1. 留存率波动偏大：核心拒收集中在 `implicit_full_enumeration`、`path_missing_hop_bound`、`intent_verifier_mismatch`。
+2. 分布仍偏 L1：30 条样本中 `L1=16, L2=10, L3=4`。
+3. 同质化可见：虽无完全重复 task，但仍有模板化高相似问法（例如属性查询句式重复）。
+4. intent 标签噪声：`relation.exist`, `chain.reason`, `hop.multi` 等别名类标签仍在出现。
+
+后续优化（建议顺序）：
+1. P0：上线 level/subtype 硬配额与上限约束（不是只靠 prompt 软引导）。
+2. P0：统一 intent 规范字典，建立 subtype -> canonical intent 的单一映射源。
+3. P1：增加“多样性惩罚”策略（模板/实体复用上限、n-gram 相似度阈值）。
+4. P1：对 path/ranking 子类做定向采样与模板兜底，减少易拒收样本。
+5. P2：将留存率拆解到“生成前静态校验 / 生成后执行校验 / 语义对齐校验”三级看板。
+
+### 10.6 Task Subtype 体系评估（是否需要改）
+
+结论（针对当前 pure QA 范围）：
+1. 现有分级体系“可用但不完整”，建议补充和收敛，不建议原样长期沿用。
+2. 当前 `REGISTER_LIST` 仅启用 `L1/L2/L3`，`L4` 已天然不在执行路径中，符合当前范围。
+3. 主要问题不是“层级数量不够”，而是“子类定义与生成/意图规范没有完全闭环”。
+
+具体不足：
+1. L2 聚合子类在代码中被注释，导致 aggregation 类覆盖策略不稳定。
+2. 子类名是自然语言描述，缺少稳定 subtype_id，影响跨版本统计与对齐。
+3. intent 与 subtype 关系不是一对一规范映射，仍靠启发式与别名兜底。
+
+建议改造（QueryTaxonomy v2）：
+1. 为每个 subtype 增加稳定 `subtype_id`（例如 `q_l1_attr`, `q_l2_multi_hop`）。
+2. 为每个 subtype 增加 `canonical_intents`、`required_query_features`、`forbidden_patterns`。
+3. 恢复并重写 L2 aggregation 子类（限定“局部可问 + 全局可验真”的模板边界）。
+4. 把“是否启用 L4”作为配置开关，不在 pure QA 默认路径中出现。
+5. 把覆盖目标从“级别均匀”升级为“级别 x subtype x operation 三维配额”。
 
 ---
 
@@ -400,3 +454,110 @@
 - “反洗钱可疑链路检测 + 可视化 + 分析报告”
 2. 先做模板化 verifier 与报告骨架，不追求语言多样性。
 3. 跑通 end-to-end 后再放开语言改写和长尾任务。
+
+---
+
+## 14. 下一阶段：采样意图与分类体系“完整化”改造清单（Query-only）
+
+> 目标：把当前“可用但不完整”的数据合成主线，升级为“可解释、可控、可考核”的完整体系。
+
+### 14.1 当前缺口（需明确修复）
+
+1. 采样意图口径过粗：当前采样层仅围绕少量 canonical intent，无法完整反映实际任务意图。
+2. 采样统计失真：`sampling_stats` 的 `attempts` 主要集中在 primary intent，二级意图缺少真实尝试计数。
+3. 分类体系未闭环：`task_subtype`、`intent_set`、query 特征约束并非同一来源，存在别名漂移。
+4. 子类定义缺项：L2 aggregation 当前未完整纳入稳定路径，覆盖不足。
+5. 分布控制偏软：仅靠 prompt + 反馈预算，缺少硬配额与上限机制。
+
+### 14.2 完整采样意图字典（建议 v2）
+
+纯 QA 范围建议使用以下采样意图集（分层）：
+
+1. Core 意图：
+- `query.lookup`
+- `query.neighbor`
+- `query.filter.single`
+- `query.filter.combined`
+- `query.reasoning.single_step`
+- `query.reasoning.chain`
+- `query.path.reachability`
+- `query.path.shortest`
+- `query.aggregation.count`
+- `query.aggregation.group_count`
+- `query.ranking.topk`
+- `query.topology.degree`
+
+2. 约束标签（用于 gate 与模板路由）：
+- `requires_hop_bound`
+- `requires_order_limit`
+- `requires_group_by`
+- `forbid_unbounded_enumeration`
+- `global_answer_required`
+
+说明：
+1. 采样层统计按 `core_intent` 记录尝试/命中/接受，不再只统计 primary intent。
+2. 约束标签不参与采样配额，但参与校验和模板选择。
+
+### 14.3 完整分类体系（QueryTaxonomy v2）
+
+为避免“名字像分类、行为却不可控”，建议引入三层结构：
+
+1. `subtype_id`（稳定主键）：
+- 例如 `q_l1_attr_lookup`, `q_l2_multi_hop`, `q_l3_topology_degree`
+
+2. `subtype_meta`（结构化定义）：
+- `level`
+- `display_name`
+- `canonical_intents`
+- `required_query_features`
+- `forbidden_patterns`
+- `target_ratio_min/max`
+
+3. `runtime_mapping`（执行期约束）：
+- `template_routes`
+- `sampler_probe_rules`
+- `qa_gate_rules`
+
+关键要求：
+1. `task_subtype -> canonical_intents` 必须一对一可追溯。
+2. subtype 统计、采样控制、QA gate 拒收原因使用同一套 subtype_id 与 intent 字典。
+
+### 14.4 待办任务（按优先级）
+
+P0（必须先做）：
+1. 定义并落地 `SamplingIntentV2` 字典（含 core intent + constraint tags）。
+2. 在 sampler 中实现“全 intent 计数”：
+- `attempts_by_intent`
+- `feasible_hits_by_intent`
+- `accepted_hits_by_intent`
+3. 在 `task_subtypes` 中引入 `subtype_id` 与 `canonical_intents` 字段。
+4. 建立 `subtype_id -> sampler intents -> QA rules` 的统一映射配置。
+5. 恢复并重写 L2 aggregation 子类（确保 query-only 下可验真）。
+
+P1（强烈建议）：
+1. 引入硬配额控制：`level x subtype x operation` 三维最小配额 + 上限。
+2. 引入多样性约束：模板复用率、实体复用率、文本相似度阈值。
+3. 在 `quality_audit` 中增加“分布偏差指数”和“同质化指数”。
+
+P2（持续优化）：
+1. 引入意图漂移监控（真实用户问题 vs 合成样本）。
+2. 引入自适应采样权重（根据 coverage gap 自动调度）。
+3. 引入 rejection replay（针对高频拒收模式的模板修复闭环）。
+
+### 14.5 验收标准（完整化版本）
+
+功能完整性：
+1. `sampling_stats` 能展示全量 core intent 的尝试/命中/接受计数。
+2. 数据集中每条样本都能映射到稳定 `subtype_id`。
+3. subtype 与 intent 映射在生成/过滤/评估三阶段一致。
+
+质量与分布：
+1. `global_verifier_executable_rate >= 98%`
+2. `data_retention_rate >= 80%`
+3. `L3 占比 >= 20%`（query-only 目标）
+4. `subtype 覆盖数 >= 8`（size=30 基准）
+5. 高相似问法对（按句式规则）占比 <= 15%
+
+可观测性：
+1. `sampling_stats`、`qa_gate_stats`、`quality_audit` 三份报告口径一致。
+2. 每次生成输出拒收 TopN 原因与各 subtype 覆盖缺口。
